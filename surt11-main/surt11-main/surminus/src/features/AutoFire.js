@@ -1,0 +1,130 @@
+import { settings, gameManager, inputState, aimState } from '@/core/state.js';
+import { ref_addEventListener } from '@/core/hook.js';
+import { outer } from '@/core/outer';
+import { translations } from '@/core/obfuscatedNameTranslator.js';
+import { hasValidTarget, getAimbotShootableState } from '@/features/Aimbot.js';
+import { inputCommands } from '@/utils/constants.js';
+
+export let autoFireEnabled;
+const PRIMARY_BUTTON = 0;
+const MELEE_AUTOFIRE_DISTANCE = 5;
+let isAutoFiringAutomatic = false;
+
+const update = () => {
+  autoFireEnabled = settings.autoFire_.enabled_;
+};
+const isAimbotAutomatic = () => {
+  return settings.aimbot_.enabled_ && settings.aimbot_.automatic_;
+};
+const getClosestEnemyDistance = () => {
+  try {
+    const game = gameManager.game;
+    if (!game || !game.initialized) return Infinity;
+    const players = game[translations.playerManager_][translations.players_];
+    const me = game[translations.activePlayer_];
+    if (!players || !me) return Infinity;
+    let closestDistance = Infinity;
+    for (const player of players) {
+      if (!player.active || me.__id === player.__id) continue;
+      if (player[translations.netData_][translations.dead_]) continue;
+      const mePos = me[translations.visualPos_];
+      const enemyPos = player[translations.visualPos_];
+      const distance = Math.hypot(mePos.x - enemyPos.x, mePos.y - enemyPos.y);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+      }
+    }
+    return closestDistance;
+  } catch {
+    return Infinity;
+  }
+};
+const canFireWithCurrentWeapon = () => {
+  try {
+    const game = gameManager.game;
+    if (!game || !game.initialized) return false;
+    const activePlayer = game[translations.activePlayer_];
+    if (!activePlayer) return false;
+    const localData = activePlayer[translations.localData_];
+    if (!localData) return false;
+    const currentWeaponIndex = localData[translations.curWeapIdx_];
+    if (currentWeaponIndex === 0 || currentWeaponIndex === 1) return true;
+    if (currentWeaponIndex === 2 && settings.meleeLock_.enabled_ && settings.aimbot_.blatant_) {
+      return getClosestEnemyDistance() < MELEE_AUTOFIRE_DISTANCE;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+};
+const hasAimbotTarget = () => {
+  if (isAimbotAutomatic()) {
+    return hasValidTarget() && getAimbotShootableState();
+  }
+  try {
+    const game = gameManager.game;
+    if (!game || !game.initialized) return false;
+    const activePlayer = game[translations.activePlayer_];
+    if (!activePlayer) return false; 
+    const players = game[translations.players_];
+    if (!players || players.length === 0) return false;
+    const me = game[translations.player_];
+    if (!me || !me.alive_) return false;
+    return players.some(p => p && p.active && !p[translations.netData_][translations.dead_] && p.__id !== me.__id);
+  } catch {
+    return false;
+  }
+};
+const simulateMouseDown = () => {
+  const mouseDownEvent = new MouseEvent('mousedown', {
+    bubbles: true,
+    cancelable: true,
+    view: outer,
+    button: PRIMARY_BUTTON,
+  });
+  outer.dispatchEvent(mouseDownEvent);
+};
+const simulateMouseUp = () => {
+  const mouseUpEvent = new MouseEvent('mouseup', {
+    bubbles: true,
+    cancelable: true,
+    view: outer,
+    button: PRIMARY_BUTTON,
+  });
+  outer.dispatchEvent(mouseUpEvent);
+};
+const handleMouseDown = (event) => {
+  if (event.button !== PRIMARY_BUTTON) return;
+  update();
+};
+const handleMouseUp = (event) => {
+  if (event.button !== PRIMARY_BUTTON) return;
+  autoFireEnabled = false;
+  isAutoFiringAutomatic = false;
+};
+const autoFireTicker = () => {
+  if (!settings.autoFire_.enabled_) {
+    if (isAutoFiringAutomatic) {
+      simulateMouseUp();
+      isAutoFiringAutomatic = false;
+    }
+    return;
+  }
+  if (isAimbotAutomatic()) {
+    const hasTarget = hasAimbotTarget();
+    const canFire = canFireWithCurrentWeapon();
+    if (hasTarget && canFire && !isAutoFiringAutomatic) {
+      simulateMouseDown();
+      isAutoFiringAutomatic = true;
+    } else if ((!hasTarget || !canFire) && isAutoFiringAutomatic) {
+      simulateMouseUp();
+      isAutoFiringAutomatic = false;
+    }
+  }
+};
+export default function () {
+  update();
+  Reflect.apply(ref_addEventListener, outer, ['mousedown', handleMouseDown]);
+  Reflect.apply(ref_addEventListener, outer, ['mouseup', handleMouseUp]);
+  setInterval(autoFireTicker, 16);
+}
