@@ -1,0 +1,46 @@
+{
+  "name": "survevhack",
+  "version": "5.5.1",
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "dev": "node build.js dev",
+    "release": "node build.js release",
+    "deploy": "node deploy.js",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "lucide-preact": "^0.544.0",
+    "preact": "*"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.28.4",
+    "@babel/preset-react": "^7.27.1",
+    "@rollup/plugin-alias": "^5.1.1",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-replace": "^6.0.2",
+    "@rollup/plugin-terser": "^0.4.4",
+    "archiver": "*",
+    "clean-css": "^5.3.3",
+    "google-closure-compiler": "^20251006.0.0",
+    "javascript-obfuscator": "^4.2.0",
+    "lzma-native": "^8.0.6",
+    "prettier": "^3.6.2",
+    "rollup": "^4.52.3",
+    "rollup-plugin-string": "^3.0.0",
+    "terser": "^5.36.0",
+    "ws": "^8.18.1"
+  },
+  "prettier": {
+    "useTabs": false,
+    "tabWidth": 2,
+    "semi": true,
+    "singleQuote": true,
+    "trailingComma": "es5",
+    "printWidth": 100,
+    "arrowParens": "always",
+    "endOfLine": "crlf"
+  }
+}

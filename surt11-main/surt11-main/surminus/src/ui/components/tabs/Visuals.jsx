@@ -183,6 +183,21 @@ const Visuals = ({ settings, onSettingChange }) => {
         />
       </div>
       <SectionTitle
+        icon={Icons.Misc_}
+        label="Layer Spoof"
+        keybind={settings.keybinds_.toggleLayerSpoof_}
+        keybindEditable={true}
+        onKeybindChange={(newKey) => onSettingChange((s) => (s.keybinds_.toggleLayerSpoof_ = newKey))}
+        enabled={settings.layerSpoof_.enabled_}
+        onEnabledChange={(v) => onSettingChange((s) => (s.layerSpoof_.enabled_ = v))}
+      />
+      <SectionTitle
+        icon={Icons.InfiniteZoom_}
+        label="Infinite Zoom"
+        enabled={settings.infiniteZoom_.enabled_}
+        onEnabledChange={(v) => onSettingChange((s) => (s.infiniteZoom_.enabled_ = v))}
+      />
+      <SectionTitle
         icon={Icons.Laser_}
         label="Pan Hero"
         enabled={settings.panHero_.enabled_}

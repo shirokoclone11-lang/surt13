@@ -52,7 +52,7 @@ export const defaultSettings = {
     enabled_: true,
     autoSwitchMelee_: true,
     autoAttack_: true,
-    detectionRadius_: 10,
+    detectionRadius_: 7,
   },
   autoFire_: {
     enabled_: true,
@@ -99,6 +99,9 @@ export const defaultSettings = {
   mapHighlights_: {
     enabled_: true,
     smallerTrees_: true,
+  },
+  infiniteZoom_: {
+    enabled_: true,
   },
   blurBackground_: {
     enabled_: true,
@@ -164,11 +167,15 @@ export const defaultSettings = {
     x_: 10,
     y_: 300,
   },
+  layerSpoof_: {
+    enabled_: true,
+  },
   keybinds_: {
     toggleMenu_: 'ShiftRight',
     toggleAimbot_: 'KeyB',
     toggleAutomatic_: 'KeyI',
     toggleSpinbot_: 'KeyO',
+    toggleLayerSpoof_: 'KeyX',
   },
   misc_: {
     discordNotifShown_: false,
@@ -258,6 +265,10 @@ const settingsKeys = {
     enabled_: '󠄞',
     smallerTrees_: '󠄚',
   },
+  infiniteZoom_: {
+    _k: 'iz',
+    enabled_: 'e',
+  },
   blurBackground_: {
     _k: '󠄤',
     enabled_: '󠄥',
@@ -327,6 +338,10 @@ const settingsKeys = {
     _k: '󠄎󠄒',
     enabled_: '󠄃󠄔',
   },
+  layerSpoof_: {
+    _k: 'ls',
+    enabled_: 'e',
+  },
   aimbotHud_: {
     _k: '󠈄',
     enabled_: '󠈅',
@@ -339,6 +354,7 @@ const settingsKeys = {
     toggleAimbot_: 'c',
     toggleAutomatic_: 'e',
     toggleSpinbot_: 'f',
+    toggleLayerSpoof_: 'g',
   },
   misc_: {
     _k: 'z',

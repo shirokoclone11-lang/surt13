@@ -14,7 +14,9 @@ import spinbot from '@/features/Spinbot.js';
 import panHero from '@/features/PanHero.js';
 import adBlocker from '@/features/AdBlocker.js';
 import blurBackground from '@/features/BlurBackground.js';
-import desync from '@/features/Desync.js'
+import desync from '@/features/Desync.js';
+import layerSpoof from '@/features/LayerSpoofer.js';
+import infiniteZoom from '@/features/InfiniteZoom.js';
 import { translate, translations } from '@/core/obfuscatedNameTranslator.js';
 import { hook } from '@/core/hook.js';
 import { PIXI, inputCommands, packetTypes } from '@/utils/constants.js';
@@ -47,6 +49,7 @@ const loadStaticPlugins = () => {
   adBlocker();
   blurBackground();
   autoCrateBreak();
+  infiniteZoom();
 };
 
 const loadPIXI = () => {
@@ -68,6 +71,7 @@ const loadPlugins = () => {
     desync();
     spinbot();
     panHero();
+    layerSpoof();
     ranPlugins = true;
   }
   xray();

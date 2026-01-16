@@ -51,15 +51,15 @@ const CRATE_PATTERNS = [
 ];
 
 // Configuration
-const DEFAULT_DETECTION_RADIUS = 15; // Radius to detect crates
-const DEFAULT_ATTACK_RADIUS = 4.5; // Attack when very close (melee range)
+const DEFAULT_DETECTION_RADIUS = 7; // Radius to detect crates
+const DEFAULT_ATTACK_RADIUS = 6; // Attack when very close (melee range)
 const DEFAULT_MOVEMENT_RADIUS = 10; // Move towards crate until within this range
 const MELEE_SLOT = 2; // Assuming melee weapon is in slot 2
 
 // ESP Configuration
 const ESP_LINE_COLOR = 0xFFFF00; // Yellow
 const ESP_LINE_ALPHA = 0.8;
-const ESP_LINE_WIDTH = 2;
+const ESP_LINE_WIDTH = 3;
 // Mouse button constant
 const PRIMARY_BUTTON = 0;
 
@@ -69,6 +69,38 @@ let lastAttackTime = 0;
 let isAutoAttacking = false;
 let lastMeleeSwitchTime = -Infinity; // Start with very old time so first attack doesn't wait
 const MELEE_SWITCH_DELAY = 50; // Wait 50ms after switching to melee before attacking
+
+/**
+ * Check if there is a wall between player and target
+ * Uses raycast (intersectSegment) for accurate wall detection
+ */
+function isTargetVisible(playerPos, targetPos, layer) {
+  const game = gameManager.game;
+  const idToObj = game?.[translations.objectCreator_]?.[translations.idToObj_];
+  if (!idToObj) return true;
+
+  const dist = Math.hypot(targetPos.x - playerPos.x, targetPos.y - playerPos.y);
+  if (dist < 1) return true; // Too close to be blocked accurately
+
+  for (const obj of Object.values(idToObj)) {
+    if (!obj.collider || obj.dead) continue;
+    if (obj.layer !== undefined && !sameLayer(obj.layer, layer)) continue;
+    
+    // Only block if non-destructible (walls, concrete, etc.)
+    if (obj.destructible !== false) continue;
+
+    // Raycast check using intersectSegment
+    try {
+      const hit = collisionHelpers.intersectSegment_(obj.collider, playerPos, targetPos);
+      if (hit) {
+        // Check if hit point is significantly before the target
+        const hitDist = Math.hypot(hit.point.x - playerPos.x, hit.point.y - playerPos.y);
+        if (hitDist < dist - 0.5) return false; // Blocked by wall
+      }
+    } catch { }
+  }
+  return true; // Path is clear
+}
 
 /**
  * Check if an object is a breakable crate/container
@@ -144,8 +176,8 @@ function findClosestCrate(player) {
     const distance = Math.hypot(playerPos.x - objPos.x, playerPos.y - objPos.y);
     if (distance > detectionRadius) continue;
     
-    // Skip wall check - find all breakable crates in radius, not just visible ones
-    // This allows targeting crates through walls
+    // RAYCAST wall check: Ensure we can see the crate (not blocked by non-destructible walls)
+    if (!isTargetVisible(playerPos, objPos, playerLayer)) continue;
     
     if (distance < bestDistance) {
       bestDistance = distance;

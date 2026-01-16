@@ -5,7 +5,6 @@ const Navbar = ({ activeTab, onTabChange }) => {
   const tabs = [
     { id: 'main', label: 'Main', icon: Icons.Main_ },
     { id: 'visuals', label: 'Visuals', icon: Icons.Visuals_ },
-    { id: 'weapons', label: 'Weapons', icon: Icons.Weaponsw_ },
     { id: 'misc', label: 'Misc', icon: Icons.Misc_ },
     { id: 'style', label: 'Style', icon: Icons.Style_ },
     { id: 'help', label: 'Help', icon: Icons.Help_ },

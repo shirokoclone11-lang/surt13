@@ -86,7 +86,7 @@ const Main = ({ settings, onSettingChange }) => {
 
       <SectionTitle
         icon={Icons.SemiAuto_}
-        label="Semi Auto"
+        label="BumpFire"
         enabled={settings.autoFire_.enabled_}
         onEnabledChange={(v) => onSettingChange((s) => (s.autoFire_.enabled_ = v))}
       />
