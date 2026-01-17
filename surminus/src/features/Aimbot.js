@@ -12,17 +12,6 @@ import {
 import { outerDocument, outer } from '@/core/outer.js';
 import { v2, collisionHelpers, sameLayer, ballistics } from '@/utils/math.js';
 import { updateAutoCrateBreak } from '@/features/AutoCrateBreak.js';
-import {
-  findNearbyGrenades,
-  calculateGrenadeEvadeDirection,
-  findGrenades,
-  getGrenadeEvasionDirection,
-  updateGrenadeEvasionState,
-  GRENADE_EXPLOSION_RADIUS,
-  GRENADE_SAFE_DISTANCE,
-  ANTI_GRENADE_EVADE_DISTANCE,
-  GRENADE_EXPLOSION_PATTERNS,
-} from '@/features/GrenadeEvade.js';
 
 // ============================================================================
 // STATE & CONFIGURATION
@@ -46,6 +35,9 @@ const state = {
   currentLootTarget_: null,
   isSwitchingToMelee_: false,
   isMeleeAutoAttacking_: false,
+  nearestGrenade_: null,
+  lastGrenadeCheckTime_: 0,
+  grenadeEvasionAngle_: null,
   collisionCacheFrame_: 0, // Cache invalidation frame counter
   lastCachedObstacles_: null, // Cache obstacles between frames
 };
@@ -55,6 +47,23 @@ const MELEE_ENGAGE_DISTANCE = 5.5;
 const MELEE_DETECTION_DISTANCE = 7.5;
 const MELEE_LOCK_HYSTERESIS = 1.0;
 const MELEE_PREDICTION_TIME = 0.15;
+
+// Grenade constants
+const GRENADE_EXPLOSION_RADIUS = 20;
+const GRENADE_SAFE_DISTANCE = GRENADE_EXPLOSION_RADIUS + 20;
+const GRENADE_EVADE_SPEED = 255;
+const GRENADE_BASE_RADIUS = 15;
+const ANTI_GRENADE_EVADE_DISTANCE = 25;
+const ANTI_GRENADE_CHECK_INTERVAL = 50;
+
+const GRENADE_EXPLOSION_PATTERNS = [
+  'frag',
+  'explosion_frag',
+  'smoke',
+  'explosion_smoke',
+  'gas',
+  'concussion',
+];
 
 const PRIMARY_BUTTON = 0;
 let tickerAttached = false;
@@ -388,9 +397,145 @@ function predictPosition(enemy, currentPlayer) {
   return gameManager.game[translations.camera_][translations.pointToScreen_](predictedPos);
 }
 
-
 function getAdaptiveMeleeDistance(enemy) {
   return MELEE_ENGAGE_DISTANCE;
+}
+
+/** Find all grenades nearby that could threaten player */
+function findNearbyGrenades(playerPos, layer, maxDistance = GRENADE_SAFE_DISTANCE * 1.5) {
+  const game = gameManager.game;
+  const idToObj = game?.[translations.objectCreator_]?.[translations.idToObj_];
+  if (!idToObj) return [];
+  
+  const grenades = [];
+  const isLocalOnBypass = isBypassLayer(layer);
+  
+  for (const obj of Object.values(idToObj)) {
+    const isGrenade = (obj.__type === 9 && obj.type !== 'smoke') || (obj.smokeEmitter && obj.explodeParticle);
+    if (!isGrenade || obj.dead || !obj.pos) continue;
+    
+    // Check layer compatibility
+    const grenadeOnBypass = isBypassLayer(obj.layer);
+    if (!isLocalOnBypass && !grenadeOnBypass && obj.layer !== layer) continue;
+    
+    const distance = Math.hypot(playerPos.x - obj.pos.x, playerPos.y - obj.pos.y);
+    if (distance <= maxDistance) {
+      grenades.push({
+        pos: obj.pos,
+        distance: distance,
+        type: obj.type || 'frag',
+      });
+    }
+  }
+  
+  return grenades;
+}
+
+/** Calculate best direction to evade from grenades */
+function calculateGrenadeEvadeDirection(playerPos, grenades) {
+  if (grenades.length === 0) return null;
+  
+  let awayX = 0;
+  let awayY = 0;
+  
+  for (const grenade of grenades) {
+    const dx = playerPos.x - grenade.pos.x;
+    const dy = playerPos.y - grenade.pos.y;
+    const dist = Math.hypot(dx, dy);
+    
+    if (dist < 0.1) {
+      // Inside grenade - flee away HARD
+      awayX += (dx / (dist + 0.1)) * 10;
+      awayY += (dy / (dist + 0.1)) * 10;
+    } else {
+      // Weight by inverse distance
+      const weight = 1 / (dist + 1);
+      awayX += (dx / dist) * weight;
+      awayY += (dy / dist) * weight;
+    }
+  }
+  
+  const magnitude = Math.hypot(awayX, awayY);
+  return magnitude < 0.1 ? null : Math.atan2(awayY / magnitude, awayX / magnitude);
+}
+
+
+function findGrenades(me) {
+  const game = gameManager.game;
+  const idToObj = game?.[translations.objectCreator_]?.[translations.idToObj_];
+  if (!idToObj) return [];
+  
+  const mePos = me[translations.visualPos_];
+  const isLocalOnBypassLayer = isBypassLayer(me.layer);
+  const localLayer = getLocalLayer(me);
+  const maxThreatDistance = ANTI_GRENADE_EVADE_DISTANCE * 2; // Check grenades within 18 units
+  
+  const grenades = [];
+  
+  for (const obj of Object.values(idToObj)) {
+    if (!obj || obj.dead) continue;
+    
+    const objType = obj.type || '';
+    
+    // Check if object is a grenade/explosive
+    const isGrenade = GRENADE_EXPLOSION_PATTERNS.some(pattern => objType.includes(pattern));
+    if (!isGrenade) continue;
+    
+    // Check layer compatibility
+    if (obj.layer !== undefined && !meetsLayerCriteria(obj.layer, localLayer, isLocalOnBypassLayer)) {
+      continue;
+    }
+    
+    const objPos = obj[translations.visualPos_];
+    if (!objPos) continue;
+    
+    // Calculate distance
+    const distance = Math.hypot(mePos.x - objPos.x, mePos.y - objPos.y);
+    
+    // Only consider nearby grenades
+    if (distance > maxThreatDistance) continue;
+    
+    // Determine explosion radius (some grenades might have different radiuses)
+    const explosionRadius = obj.explosionRadius || GRENADE_BASE_RADIUS;
+    
+    grenades.push({
+      object: obj,
+      position: objPos,
+      distance: distance,
+      explosionRadius: explosionRadius,
+      dangerZone: explosionRadius + 1 // Add safety margin
+    });
+  }
+  
+  return grenades.sort((a, b) => a.distance - b.distance);
+}
+
+function getGrenadeEvasionDirection(grenades, mePos) {
+  // Calculate direction to evade from nearest grenades
+  if (!grenades || grenades.length === 0) return null;
+  
+  // Get the nearest grenade that threatens us
+  let threatGrenade = null;
+  for (const grenade of grenades) {
+    if (grenade.distance <= grenade.dangerZone) {
+      threatGrenade = grenade;
+      break;
+    }
+  }
+  
+  if (!threatGrenade) return null;
+  const grenadePos = threatGrenade.position;
+  const dx = mePos.x - grenadePos.x;
+  const dy = mePos.y - grenadePos.y;
+  const dist = Math.hypot(dx, dy);
+  
+  if (dist < 0.1) {
+    // We're on top of grenade, run in random direction
+    return Math.random() * Math.PI * 2;
+  }
+  
+  // Direction away from grenade
+  return Math.atan2(dy, dx);
 }
 
 
@@ -696,8 +841,18 @@ function aimbotTicker() {
     
     // Check for grenades if anti-explosion is enabled
     const now = performance.now();
-    if (settings.meleeLock_?.antiExplosion_) {
-      const grenadeState = updateGrenadeEvasionState(me);
+    if (settings.meleeLock_.antiExplosion_ && now - state.lastGrenadeCheckTime_ > ANTI_GRENADE_CHECK_INTERVAL) {
+      const grenades = findGrenades(me);
+      state.nearestGrenade_ = grenades.length > 0 ? grenades[0] : null;
+      state.lastGrenadeCheckTime_ = now;
+      
+      // Calculate evasion direction if needed
+      if (grenades.length > 0) {
+        const mePos = me[translations.visualPos_];
+        state.grenadeEvasionAngle_ = getGrenadeEvasionDirection(grenades, mePos);
+      } else {
+        state.grenadeEvasionAngle_ = null;
+      }
     }
 
     try {
@@ -727,10 +882,10 @@ function aimbotTicker() {
         state.lastTargetScreenPos_ = null;
         aimState.silentAimAngle_ = null;
         return; // Skip all other aim logic
+      }
       
       // Anti-grenade: Check for nearby grenades
       const mePos = me[translations.visualPos_];
-      const grenadeState2 = updateGrenadeEvasionState(me);
       const nearbyGrenades = findNearbyGrenades(mePos, me.layer);
       const grenadeEvadeDir = calculateGrenadeEvadeDirection(mePos, nearbyGrenades);
       const shouldEvadeGrenade = grenadeEvadeDir !== null;
