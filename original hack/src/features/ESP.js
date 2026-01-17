@@ -9,10 +9,11 @@ import {
   inputCommands,
   PIXI,
 } from '@/utils/constants.js';
-import { originalLayerValue, isLayerSpoofActive } from '@/features/LayerSpoofer.js';
 import { getCurrentAimPosition, isAimInterpolating } from '@/core/aimController.js';
 import { outer } from '@/core/outer.js';
 import { v2, collisionHelpers, sameLayer } from '@/utils/math.js';
+
+
 
 const calculateGunPosition = (playerPos, direction, weapon) => {
   if (!weapon) return playerPos;
@@ -26,6 +27,10 @@ const COLORS = {
   BLUE_: 0x3a88f4,
   RED_: 0xdc3734,
   WHITE_: 0xffffff,
+  ENEMY_RED_: 0xff3333,
+  ALLY_BLUE_: 0x4da6ff,
+  NEUTRAL_: 0xffff00,
+  DANGER_: 0xff0000,
 };
 
 const GRENADE_COLORS = {
@@ -36,12 +41,24 @@ const GRENADE_COLORS = {
   MARTYR_: 0xee3333,
 };
 
+// Helper to draw glowing lines
+const drawGlowLine = (graphics, fromX, fromY, toX, toY, color, thickness, glowSize = 0.3) => {
+  // Glow layer (semi-transparent, larger)
+  graphics.lineStyle(thickness + glowSize * 2, color, 0.15);
+  graphics.moveTo(fromX, fromY);
+  graphics.lineTo(toX, toY);
+  
+  // Main line
+  graphics.lineStyle(thickness, color, 0.8);
+  graphics.moveTo(fromX, fromY);
+  graphics.lineTo(toX, toY);
+};
+
 const graphicsCache = {};
 const isBypassLayer = (layer) => layer === 2 || layer === 3;
 
 const getLocalLayer = (player) => {
   if (isBypassLayer(player.layer)) return player.layer;
-  if (isLayerSpoofActive && originalLayerValue !== undefined) return originalLayerValue;
   return player.layer;
 };
 
@@ -55,6 +72,8 @@ const getGraphics = (container, key) => {
     if (graphicsCache[key] && graphicsCache[key].parent) {
       graphicsCache[key].parent.removeChild(graphicsCache[key]);
     }
+    // Safety check: ensure PIXI.Graphics_ is available
+    if (!PIXI.Graphics_) return null;
     container[key] = new PIXI.Graphics_();
     container.addChild(container[key]);
   }
@@ -62,8 +81,10 @@ const getGraphics = (container, key) => {
 };
 
 function nameTag(player) {
-  const playerWeapon = player[translations.netData_][translations.activeWeapon_];
-  const playerName = player.nameText._text;
+  if (!player.nameText) return;
+  const netData = player[translations.netData_];
+  if (!netData) return; // Skip if no data
+  const playerWeapon = netData[translations.activeWeapon_];
   const localPlayer = gameManager.game[translations.activePlayer_];
   const isSameTeam = findTeam(player) === findTeam(localPlayer);
 
@@ -80,14 +101,118 @@ function nameTag(player) {
   player.nameText.style.dropShadowBlur = 0.1;
 }
 
+const getArmorLevel = (id) => {
+  if (!id) return 0;
+  const match = id.match(/(\d+)/);
+  return match ? parseInt(match[0]) : 0;
+};
+
+const calculateShotsToKill = (weaponType, targetHealth, targetVestId) => {
+  if (!weaponType || !GunDefs[weaponType]) return null;
+
+  const gunDef = GunDefs[weaponType];
+  const bulletDef = BulletDefs[gunDef.bulletType];
+
+  if (!bulletDef) return null;
+
+  let damage = bulletDef.damage;
+  const vestLevel = getArmorLevel(targetVestId);
+
+  // Apply armor reduction
+  if (vestLevel > 0 && ArmorDefs.vests[vestLevel]) {
+    damage *= (1 - ArmorDefs.vests[vestLevel]);
+  }
+
+  // Handle Buckshot/Pellets (if count is defined)
+  if (bulletDef.count > 1) {
+      damage *= bulletDef.count; // Assuming all pellets hit for now (optimistic STK)
+  }
+
+  if (damage <= 0) return 999;
+
+  return Math.ceil(targetHealth / damage);
+};
+
+const getText = (container, key) => {
+  if (!container[key]) {
+    container[key] = new PIXI.Text_('', {
+      fontSize: 14,
+      fontFamily: 'Arial',
+      fill: 'white',
+      stroke: 'black',
+      strokeThickness: 2,
+      fontWeight: 'bold',
+      dropShadow: true,
+      dropShadowColor: '#000000',
+      dropShadowBlur: 4,
+    });
+    container[key].anchor.set(0.5, 0.5);
+    container[key].zIndex = 100;
+    container.addChild(container[key]);
+  }
+  return container[key];
+};
+
+function renderDamageText(player) {
+  if (!player.container) return;
+  const localPlayer = gameManager.game[translations.activePlayer_];
+  /* DEBUG: Check if function is called and settings status */
+  // outer.console.log('renderDamageText', { enabled: settings.esp_.enabled_, showDamage: settings.esp_.showDamage_ });
+  
+  if (!settings.esp_.enabled_ || !settings.esp_.showDamage_) {
+    if (player.container['damageText']) player.container['damageText'].visible = false;
+    return;
+  }
+  
+  if (player === localPlayer || findTeam(player) === findTeam(localPlayer) || !player.active || player[translations.netData_][translations.dead_]) {
+      if (player.container['damageText']) player.container['damageText'].visible = false;
+      return;
+  }
+
+  const localNetData = localPlayer[translations.netData_];
+  const localWeaponType = localNetData[translations.activeWeapon_];
+   // outer.console.log('Local Weapon:', localWeaponType);
+
+  const netData = player[translations.netData_];
+  if (!netData) return; // Skip if no data
+  // outer.console.log('NetData Dump:', netData); // Debug health issue
+  /* DEBUG: Find Health Property */
+  // for (const key in netData) {
+  //     if (typeof netData[key] === 'number' && netData[key] === 100) {
+  //         outer.console.log('POSSIBLE HEALTH PROPERTY FOUND:', key);
+  //     }
+  // }
+
+  let health = netData[translations.health_] ?? 100;
+  if (health <= 0) health = 100; // Force 100 if 0 (server likely hides health)
+
+  const vest = netData[translations.vest_];
+  
+  const stk = calculateShotsToKill(localWeaponType, health, vest);
+   // outer.console.log('STK:', stk, 'Health:', health, 'Vest:', vest, 'Weapon:', localWeaponType);
+  
+  const textObj = getText(player.container, 'damageText');
+
+  if (stk !== null) {
+      textObj.text = `${stk} HTK`; // Hits to Kill
+      textObj.style.fill = stk <= 3 ? '#ff0000' : '#ffffff'; // Red if low hits needed
+      textObj.visible = true;
+      textObj.position.y = -55; // Above player
+      // outer.console.log('Text Visible:', textObj.text);
+  } else {
+      textObj.visible = false;
+      // outer.console.log('STK is null');
+  }
+}
+
+
 const castRay = (startPos, dir, maxDist, layer, localPlayer) => {
   const game = gameManager.game;
   const idToObj = game?.[translations.objectCreator_]?.[translations.idToObj_];
   if (!idToObj) return maxDist;
 
   const BULLET_HEIGHT = 0.25;
-  const trueLayer =
-    isLayerSpoofActive && originalLayerValue !== undefined ? originalLayerValue : layer;
+  const trueLayer = layer;
 
   const endPos = v2.add_(startPos, v2.mul_(dir, maxDist));
   let closestDist = maxDist;
@@ -234,27 +359,39 @@ function renderPlayerLines(localPlayer, players, graphics) {
   players.forEach((player) => {
     if (
       !player.active ||
-      player[translations.netData_][translations.dead_] ||
+      (player[translations.netData_] && player[translations.netData_][translations.dead_]) ||
       localPlayer.__id === player.__id
     )
       return;
 
-    const team = findTeam(player);
+    const team = player.cachedTeam ?? findTeam(player);
     const isOnEffectiveLayer = meetsLayerCriteria(player.layer, localLayer, isLocalOnBypassLayer);
     const isDowned = player.downed;
-    const lineColor =
-      team === playerTeam
-        ? COLORS.BLUE_
-        : isOnEffectiveLayer && !isDowned
-          ? COLORS.RED_
-          : COLORS.WHITE_;
+    
+    let lineColor;
+    if (team === playerTeam) {
+      lineColor = COLORS.ALLY_BLUE_;
+    } else if (!isOnEffectiveLayer || isDowned) {
+      lineColor = COLORS.WHITE_;
+    } else {
+      lineColor = COLORS.ENEMY_RED_;
+    }
 
-    graphics.lineStyle(2, lineColor, 0.45);
+    const playerPos = player.pos ?? player[translations.pos_] ?? player.m_pos;
+    if (!playerPos) return;
+
+    const toX = (playerPos.x - playerX) * 16;
+    const toY = (playerY - playerPos.y) * 16;
+    
+    // Glow effect
+    graphics.lineStyle(3.5, lineColor, 0.2);
     graphics.moveTo(0, 0);
-    graphics.lineTo(
-      (player[translations.pos_].x - playerX) * 16,
-      (playerY - player[translations.pos_].y) * 16
-    );
+    graphics.lineTo(toX, toY);
+    
+    // Main line
+    graphics.lineStyle(2.2, lineColor, 0.7);
+    graphics.moveTo(0, 0);
+    graphics.lineTo(toX, toY);
   });
 }
 
@@ -273,16 +410,25 @@ function renderGrenadeZones(localPlayer, graphics) {
 
   grenades.forEach((grenade) => {
     const effectiveMatch = meetsLayerCriteria(grenade.layer, playerLayer, isLocalOnBypassLayer);
-    const opacity = effectiveMatch ? 0.1 : 0.2;
-    const fillColor = effectiveMatch ? COLORS.RED_ : COLORS.WHITE_;
+    const opacity = effectiveMatch ? 0.15 : 0.08;
+    const fillColor = effectiveMatch ? COLORS.DANGER_ : COLORS.WHITE_;
     const radius = 13 * 16;
+    const screenX = (grenade.pos.x - playerX) * 16;
+    const screenY = (playerY - grenade.pos.y) * 16;
 
-    graphics.beginFill(fillColor, opacity);
-    graphics.drawCircle((grenade.pos.x - playerX) * 16, (playerY - grenade.pos.y) * 16, radius);
+    // Outer glow
+    graphics.beginFill(fillColor, opacity * 0.5);
+    graphics.drawCircle(screenX, screenY, radius * 1.2);
     graphics.endFill();
 
-    graphics.lineStyle(2, 0x000000, 0.2);
-    graphics.drawCircle((grenade.pos.x - playerX) * 16, (playerY - grenade.pos.y) * 16, radius);
+    // Main zone
+    graphics.beginFill(fillColor, opacity);
+    graphics.drawCircle(screenX, screenY, radius);
+    graphics.endFill();
+
+    // Border
+    graphics.lineStyle(2.5, fillColor, effectiveMatch ? 0.6 : 0.3);
+    graphics.drawCircle(screenX, screenY, radius);
   });
 }
 
@@ -361,21 +507,38 @@ function renderGrenadeTrajectory(localPlayer, graphics) {
     lineColor = GRENADE_COLORS.MARTYR_;
   }
 
-  graphics.lineStyle(3, lineColor, 0.7);
+  const endScreenX = (endX - playerX) * 16;
+  const endScreenY = (playerY - endY) * 16;
+
+  // Glow effect
+  graphics.lineStyle(5, lineColor, 0.2);
   graphics.moveTo(0, 0);
-  graphics.lineTo((endX - playerX) * 16, (playerY - endY) * 16);
+  graphics.lineTo(endScreenX, endScreenY);
+
+  // Main line
+  graphics.lineStyle(3, lineColor, 0.8);
+  graphics.moveTo(0, 0);
+  graphics.lineTo(endScreenX, endScreenY);
 
   const grenadeType = activeItem.replace('_cook', '');
   const explosionType = gameObjects[grenadeType]?.explosionType;
 
   if (explosionType && gameObjects[explosionType]) {
     const radius = (gameObjects[explosionType].rad.max + 1) * 16;
-    graphics.beginFill(lineColor, 0.2);
-    graphics.drawCircle((endX - playerX) * 16, (playerY - endY) * 16, radius);
+
+    // Outer glow
+    graphics.beginFill(lineColor, 0.08);
+    graphics.drawCircle(endScreenX, endScreenY, radius * 1.15);
     graphics.endFill();
 
-    graphics.lineStyle(2, lineColor, 0.4);
-    graphics.drawCircle((endX - playerX) * 16, (playerY - endY) * 16, radius);
+    // Zone fill
+    graphics.beginFill(lineColor, 0.12);
+    graphics.drawCircle(endScreenX, endScreenY, radius);
+    graphics.endFill();
+
+    // Border
+    graphics.lineStyle(2.5, lineColor, 0.6);
+    graphics.drawCircle(endScreenX, endScreenY, radius);
   }
 }
 
@@ -476,6 +639,7 @@ function calculateTrajectory(startPos, dir, distance, layer, localPlayer, maxBou
     for (const collider of playerColliders) {
       const res = collisionHelpers.intersectSegmentCircle_(pos, endPos, collider.pos, collider.rad);
       if (res) {
+
         const dist = v2.lengthSqr_(v2.sub_(res.point, pos));
         if (dist < closestDist && dist > 0.0001) {
           closestDist = dist;
@@ -630,11 +794,11 @@ function renderBulletTrajectory(localPlayer, graphics) {
   );
 
   const hitPlayer = segments.some((segment) => segment.hitPlayer);
-  const trajectoryColor = hitPlayer ? COLORS.RED_ : 0xff00ff;
-  const trajectoryWidth = hitPlayer ? 2 : 1;
+  const trajectoryColor = hitPlayer ? COLORS.DANGER_ : 0xff00ff;
+  const trajectoryWidth = hitPlayer ? 3 : 2;
 
-  graphics.lineStyle(trajectoryWidth, trajectoryColor, 0.5);
-
+  // Glow effect
+  graphics.lineStyle(trajectoryWidth + 2, trajectoryColor, 0.2);
   for (const segment of segments) {
     const startScreen = {
       x: (segment.start.x - playerPos.x) * 16,
@@ -644,11 +808,24 @@ function renderBulletTrajectory(localPlayer, graphics) {
       x: (segment.end.x - playerPos.x) * 16,
       y: (playerPos.y - segment.end.y) * 16,
     };
-
     graphics.moveTo(startScreen.x, startScreen.y);
     graphics.lineTo(endScreen.x, endScreen.y);
   }
-}
+
+  // Main trajectory
+  graphics.lineStyle(trajectoryWidth, trajectoryColor, 0.75);
+  for (const segment of segments) {
+    const startScreen = {
+      x: (segment.start.x - playerPos.x) * 16,
+      y: (playerPos.y - segment.start.y) * 16,
+    };
+    const endScreen = {
+      x: (segment.end.x - playerPos.x) * 16,
+      y: (playerPos.y - segment.end.y) * 16,
+    };
+    graphics.moveTo(startScreen.x, startScreen.y);
+    graphics.lineTo(endScreen.x, endScreen.y);
+  }}
 
 function renderFlashlights(localPlayer, players, graphics) {
   const localWeapon = findWeapon(localPlayer);
@@ -678,6 +855,10 @@ function renderFlashlights(localPlayer, players, graphics) {
   });
 }
 
+// [Scanners removed: Analysis code cleanup]
+
+// [Scanner removed]
+
 function renderESP() {
   try {
     const pixi = gameManager.pixi;
@@ -687,39 +868,52 @@ function renderESP() {
     if (!pixi || !localPlayer || !localPlayer.container || !gameManager.game?.initialized) return;
 
     const lineGraphics = getGraphics(localPlayer.container, 'playerLines');
-    lineGraphics.clear();
-    if (settings.esp_.enabled_ && settings.esp_.players_) {
-      renderPlayerLines(localPlayer, players, lineGraphics);
+    if (lineGraphics) {
+      lineGraphics.clear();
+      if (settings.esp_.enabled_ && settings.esp_.players_) {
+        renderPlayerLines(localPlayer, players, lineGraphics);
+      }
     }
 
     const grenadeGraphics = getGraphics(localPlayer.container, 'grenadeDangerZones');
-    grenadeGraphics.clear();
-    if (settings.esp_.enabled_ && settings.esp_.grenades_.explosions_) {
-      renderGrenadeZones(localPlayer, grenadeGraphics);
+    if (grenadeGraphics) {
+      grenadeGraphics.clear();
+      if (settings.esp_.enabled_ && settings.esp_.grenades_.explosions_) {
+        renderGrenadeZones(localPlayer, grenadeGraphics);
+      }
     }
 
     const trajectoryGraphics = getGraphics(localPlayer.container, 'grenadeTrajectory');
-    trajectoryGraphics.clear();
-    if (settings.esp_.enabled_ && settings.esp_.grenades_.trajectory_) {
-      renderGrenadeTrajectory(localPlayer, trajectoryGraphics);
+    if (trajectoryGraphics) {
+      trajectoryGraphics.clear();
+      if (settings.esp_.enabled_ && settings.esp_.grenades_.trajectory_) {
+        renderGrenadeTrajectory(localPlayer, trajectoryGraphics);
+      }
     }
 
     const flashlightGraphics = getGraphics(localPlayer.container, 'flashlights');
-    flashlightGraphics.clear();
-    if (
-      settings.esp_.enabled_ &&
-      (settings.esp_.flashlights_.others_ || settings.esp_.flashlights_.own_)
-    ) {
-      renderFlashlights(localPlayer, players, flashlightGraphics);
+    if (flashlightGraphics) {
+      flashlightGraphics.clear();
+      if (
+        settings.esp_.enabled_ &&
+        (settings.esp_.flashlights_.others_ || settings.esp_.flashlights_.own_)
+      ) {
+        renderFlashlights(localPlayer, players, flashlightGraphics);
+      }
     }
 
     const trajectoryGraphics2 = getGraphics(localPlayer.container, 'bulletTrajectory');
-    trajectoryGraphics2.clear();
-    if (settings.esp_.enabled_ && settings.esp_.flashlights_.trajectory_) {
-      renderBulletTrajectory(localPlayer, trajectoryGraphics2);
+    if (trajectoryGraphics2) {
+      trajectoryGraphics2.clear();
+      if (settings.esp_.enabled_ && settings.esp_.flashlights_.trajectory_) {
+        renderBulletTrajectory(localPlayer, trajectoryGraphics2);
+      }
     }
 
-    players.forEach(nameTag);
+    players.forEach(p => {
+      nameTag(p);
+      renderDamageText(p);
+    });
   } catch { }
 }
 

@@ -65,5 +65,4 @@ export const Icons = {
   Weaponsw_: BowArrow,
   Weaponsswm_: EqualApproximately,
   Autocrate_: Package2,
-  InfiniteZoom_: ZoomIn,
 };

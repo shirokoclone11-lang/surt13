@@ -6,15 +6,15 @@ import autoHeal from '@/features/AutoHeal.js';
 import aimbot, { hasValidTarget } from '@/features/Aimbot.js';
 import autoCrateBreak, { updateAutoCrateBreak } from '@/features/AutoCrateBreak.js';
 import mapHighlights from '@/features/MapHighlights.js';
+import mapESP from '@/features/MapESP.js';
+import playerRadar from '@/features/PlayerRadar.js';
 import autoSwitch from '@/features/AutoSwitch.js';
 import weaponSwitch from '@/features/WeaponSwitch.js';
 import spinbot from '@/features/Spinbot.js';
 import panHero from '@/features/PanHero.js';
 import adBlocker from '@/features/AdBlocker.js';
 import blurBackground from '@/features/BlurBackground.js';
-import desync from '@/features/Desync.js';
-import layerSpoof from '@/features/LayerSpoofer.js';
-import infiniteZoom from '@/features/InfiniteZoom.js';
+import desync from '@/features/Desync.js'
 import { translate, translations } from '@/core/obfuscatedNameTranslator.js';
 import { hook } from '@/core/hook.js';
 import { PIXI, inputCommands, packetTypes } from '@/utils/constants.js';
@@ -42,10 +42,11 @@ const loadStaticPlugins = () => {
   autoFire();
   autoHeal();
   mapHighlights();
+  mapESP();
+  playerRadar();
   adBlocker();
   blurBackground();
   autoCrateBreak();
-  infiniteZoom();
 };
 
 const loadPIXI = () => {
@@ -67,7 +68,6 @@ const loadPlugins = () => {
     desync();
     spinbot();
     panHero();
-    layerSpoof();
     ranPlugins = true;
   }
   xray();

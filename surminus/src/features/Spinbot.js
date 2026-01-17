@@ -49,12 +49,19 @@ class SpinbotManager {
 
   update() {
     if (!settings.spinbot_?.enabled_) return;
+
+    // Ne pas spinner si on tire
     if (this.isShooting) return;
+
     const game = gameManager?.game;
     if (!game?.initialized) return;
+
     const input = game[translations.input_];
     if (!input?.mousePos) return;
+
+    // Angle de spin (1-360)
     const spinSpeed = settings.spinbot_?.speed_ || 120;
+
     // Mode handling
     if (settings.spinbot_?.spinTwoDirections_) {
       // Horizontal flip with rotation (0, 180)
@@ -75,9 +82,11 @@ class SpinbotManager {
       const snapped = Math.round(this.angle / 90) * 90;
       this.angle = snapped % 360;
     } else if (settings.spinbot_?.realistic_) {
+      // Realistic: Random jitter +/- 45 degrees
       const jitter = (Math.random() - 0.5) * 90;
       this.angle += spinSpeed + jitter;
     } else {
+      // Default continuous spin
       this.angle += spinSpeed;
     }
 
@@ -96,11 +105,14 @@ class SpinbotManager {
   toggle() {
     const newState = !settings.spinbot_.enabled_;
     settings.spinbot_.enabled_ = newState;
+    // Settings auto-save via state.js persistence
     console.log('🔵 Spinbot toggled:', newState);
   }
 }
 
 export const spinbot = new SpinbotManager();
+
+// Gestion des événements souris
 const handleMouseDown = (e) => {
   if (e.button === 0) {
     spinbot.isShooting = true;
@@ -125,5 +137,6 @@ export default function () {
   Reflect.apply(ref_addEventListener, outer, ['mousedown', handleMouseDown]);
   Reflect.apply(ref_addEventListener, outer, ['mouseup', handleMouseUp]);
   Reflect.apply(ref_addEventListener, outer, ['mousemove', handleMouseMove, true]);
+
   spinbot.start();
 }

@@ -487,7 +487,8 @@ function aimbotTicker() {
         state.meleeLockEnemy_ = null;
       }
 
-      if (!settings.aimbot_.enabled_ || isMeleeEquipped || isGrenadeEquipped) {
+
+      if (!settings.aimbot_.enabled_ ) {
         setAimState(new AimState('idle'));
         aimOverlays.hideAll();
         state.lastTargetScreenPos_ = null;

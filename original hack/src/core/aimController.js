@@ -398,9 +398,44 @@ export const getAimMode = () => controllerState.mode_;
 
 const overlayState = {
   aimbotDot_: null,
-  fovCircle_: null,
   initialized_: false,
+  aimbotHUD_: null,
+  hudDragState_: {
+    isDragging: false,
+    offsetX: 0,
+    offsetY: 0,
+  },
 };
+
+const getDirectionText = (angle) => {
+  const normalized = angle % (Math.PI * 2);
+  if (normalized < 0) {
+    angle = normalized + Math.PI * 2;
+  } else {
+    angle = normalized;
+  }
+  
+  const directions = [
+    { min: -Math.PI / 8, max: Math.PI / 8, text: 'E' },
+    { min: Math.PI / 8, max: 3 * Math.PI / 8, text: 'SE' },
+    { min: 3 * Math.PI / 8, max: 5 * Math.PI / 8, text: 'S' },
+    { min: 5 * Math.PI / 8, max: 7 * Math.PI / 8, text: 'SW' },
+    { min: 7 * Math.PI / 8, max: Math.PI, text: 'W' },
+    { min: -Math.PI, max: -7 * Math.PI / 8, text: 'W' },
+    { min: -7 * Math.PI / 8, max: -5 * Math.PI / 8, text: 'NW' },
+    { min: -5 * Math.PI / 8, max: -3 * Math.PI / 8, text: 'N' },
+    { min: -3 * Math.PI / 8, max: -Math.PI / 8, text: 'NE' },
+  ];
+
+  for (const dir of directions) {
+    if (angle >= dir.min && angle < dir.max) {
+      return dir.text;
+    }
+  }
+  return 'E';
+};
+
+
 
 const ensureOverlays = (uiRoot) => {
   if (!uiRoot) return false;
@@ -412,11 +447,44 @@ const ensureOverlays = (uiRoot) => {
     uiRoot.appendChild(overlayState.aimbotDot_);
   }
 
-  if (!overlayState.fovCircle_) {
+  if (!overlayState.aimbotHUD_) {
     const outerDocument = outer.document;
-    overlayState.fovCircle_ = outerDocument.createElement('div');
-    overlayState.fovCircle_.classList.add('aimbot-fov-circle');
-    uiRoot.appendChild(overlayState.fovCircle_);
+    overlayState.aimbotHUD_ = outerDocument.createElement('div');
+    overlayState.aimbotHUD_.classList.add('aimbot-hud');
+    uiRoot.appendChild(overlayState.aimbotHUD_);
+    
+    // Initialize Drag Logic
+    overlayState.aimbotHUD_.style.cursor = 'grab';
+    overlayState.aimbotHUD_.style.position = 'fixed';
+    overlayState.aimbotHUD_.style.zIndex = '99999';
+    overlayState.aimbotHUD_.style.pointerEvents = 'auto';
+    
+    const savedX = settings.aimbotHud_.x_;
+    const savedY = settings.aimbotHud_.y_;
+    overlayState.aimbotHUD_.style.left = `${typeof savedX === 'number' ? savedX : 10}px`;
+    overlayState.aimbotHUD_.style.top = `${typeof savedY === 'number' ? savedY : 300}px`;
+
+    overlayState.aimbotHUD_.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      overlayState.hudDragState_.isDragging = true;
+      const rect = overlayState.aimbotHUD_.getBoundingClientRect();
+      overlayState.hudDragState_.offsetX = e.clientX - rect.left;
+      overlayState.hudDragState_.offsetY = e.clientY - rect.top;
+      overlayState.aimbotHUD_.style.cursor = 'grabbing';
+    });
+
+    outerDocument.addEventListener('mousemove', (e) => {
+      if (!overlayState.hudDragState_.isDragging) return;
+      overlayState.aimbotHUD_.style.left = `${e.clientX - overlayState.hudDragState_.offsetX}px`;
+      overlayState.aimbotHUD_.style.top = `${e.clientY - overlayState.hudDragState_.offsetY}px`;
+      settings.aimbotHud_.x_ = e.clientX - overlayState.hudDragState_.offsetX;
+      settings.aimbotHud_.y_ = e.clientY - overlayState.hudDragState_.offsetY;
+    });
+
+    outerDocument.addEventListener('mouseup', () => {
+      overlayState.hudDragState_.isDragging = false;
+      overlayState.aimbotHUD_.style.cursor = 'grab';
+    });
   }
 
   overlayState.initialized_ = true;
@@ -437,15 +505,21 @@ const updateAimbotDot = (displayPos, isDotTargetShootable, isFocusedEnemy) => {
       overlayState.aimbotDot_.style.top = `${y}px`;
     }
 
+    // Enhanced square crosshair with color states
     if (!isDotTargetShootable) {
-      overlayState.aimbotDot_.style.backgroundColor = 'gray';
-      overlayState.aimbotDot_.style.boxShadow = '0 0 0.5rem rgba(128, 128, 128, 0.5)';
+      overlayState.aimbotDot_.style.borderColor = 'rgba(128, 128, 128, 0.7)';
+      overlayState.aimbotDot_.style.boxShadow = 'inset 0 0 0.5rem rgba(128, 128, 128, 0.3), 0 0 1rem rgba(128, 128, 128, 0.4)';
+      overlayState.aimbotDot_.style.filter = 'brightness(0.9)';
     } else if (isFocusedEnemy) {
-      overlayState.aimbotDot_.style.backgroundColor = 'rgb(190, 12, 185)';
-      overlayState.aimbotDot_.style.boxShadow = '0 0 0.5rem rgba(190, 12, 185, 0.5)';
+      overlayState.aimbotDot_.style.borderColor = 'rgba(190, 12, 185, 0.8)';
+      overlayState.aimbotDot_.style.boxShadow = 'inset 0 0 0.5rem rgba(190, 12, 185, 0.5), 0 0 1.5rem rgba(190, 12, 185, 0.7)';
+      overlayState.aimbotDot_.style.filter = 'brightness(1.1)';
+      overlayState.aimbotDot_.style.color = 'rgb(190, 12, 185)';
     } else {
-      overlayState.aimbotDot_.style.backgroundColor = 'red';
-      overlayState.aimbotDot_.style.boxShadow = '0 0 0.5rem rgba(255, 0, 0, 0.5)';
+      overlayState.aimbotDot_.style.borderColor = 'rgba(255, 51, 51, 0.8)';
+      overlayState.aimbotDot_.style.boxShadow = 'inset 0 0 0.5rem rgba(255, 0, 0, 0.5), 0 0 1.5rem rgba(255, 0, 0, 0.7)';
+      overlayState.aimbotDot_.style.filter = 'brightness(1.1)';
+      overlayState.aimbotDot_.style.color = 'rgb(255, 51, 51)';
     }
 
     overlayState.aimbotDot_.style.display = 'block';
@@ -454,18 +528,74 @@ const updateAimbotDot = (displayPos, isDotTargetShootable, isFocusedEnemy) => {
   }
 };
 
-const updateFovCircle = () => {
-  if (!overlayState.fovCircle_) return;
-  // FOV circle disabled
-  overlayState.fovCircle_.style.display = 'none';
+const updateAimbotHUD = (targetInfo) => {
+  if (!overlayState.aimbotHUD_) return;
+
+  if (!settings.aimbot_.enabled_ || !settings.aimbotHud_.enabled_) {
+    overlayState.aimbotHUD_.style.display = 'none';
+    return;
+  }
+
+  overlayState.aimbotHUD_.style.display = 'block';
+
+  if (targetInfo) {
+    const { direction, targetName, targetPos, distance, helmetLevel, chestLevel, bagLevel, activeWeapon } = targetInfo;
+    
+    const dirText = direction !== undefined && direction !== null ? getDirectionText(direction) : 'N/A';
+    const name = targetName || 'Unknown';
+    const posText = targetPos 
+      ? `X: ${Math.round(targetPos.x)} Y: ${Math.round(targetPos.y)}`
+      : 'N/A';
+    const distText = distance !== undefined ? `${Math.round(distance)}m` : 'N/A';
+
+    // Format Weapon Name
+    let weaponName = 'None';
+    if (activeWeapon) {
+        const weaponDef = gameManager.game?.weapons?.find(w => w.id === activeWeapon);
+        weaponName = weaponDef ? weaponDef.name : activeWeapon;
+    }
+
+    const equipmentHTML = `
+      <div class="hud-equipment">
+        <div class="equipment-row">
+          <div class="eq-label">Weapon</div>
+          <div class="eq-value" style="color: #ff5050">${weaponName}</div>
+        </div>
+        <div class="equipment-row">
+          <div class="eq-label">Helmet</div>
+          <div class="eq-value">Lvl ${helmetLevel > 0 ? helmetLevel : '-'}</div>
+        </div>
+        <div class="equipment-row">
+          <div class="eq-label">Vest</div>
+          <div class="eq-value">Lvl ${chestLevel > 0 ? chestLevel : '-'}</div>
+        </div>
+        <div class="equipment-row">
+          <div class="eq-label">Bag</div>
+          <div class="eq-value">Lvl ${bagLevel > 0 ? bagLevel : '-'}</div>
+        </div>
+      </div>
+    `;
+
+    overlayState.aimbotHUD_.innerHTML = `
+      <div class="hud-direction"><svg class="hud-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 7v5l3 3"/></svg> ${dirText}</div>
+      <div class="hud-target"><svg class="hud-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="9"/></svg> ${name}</div>
+      ${equipmentHTML}
+      <div class="hud-position"><svg class="hud-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> ${posText}</div>
+      <div class="hud-distance"><svg class="hud-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><line x1="12" y1="5" x2="12" y2="19"/></svg> ${distText}</div>
+    `;
+  } else {
+    overlayState.aimbotHUD_.innerHTML = `
+      <div class="hud-target">Surminus TargetHUD</div>
+    `;
+  }
 };
 
 const hideAllOverlays = () => {
   if (overlayState.aimbotDot_) {
     overlayState.aimbotDot_.style.display = 'none';
   }
-  if (overlayState.fovCircle_) {
-    overlayState.fovCircle_.style.display = 'none';
+  if (overlayState.aimbotHUD_) {
+    overlayState.aimbotHUD_.style.display = 'none';
   }
 };
 
@@ -473,7 +603,7 @@ export const aimOverlays = {
   ensureInitialized: (uiRoot) => ensureOverlays(uiRoot),
   updateDot: (displayPos, isShootable, isFocused) =>
     updateAimbotDot(displayPos, isShootable, isFocused),
-  updateFovCircle: () => updateFovCircle(),
+  updateHUD: (targetInfo) => updateAimbotHUD(targetInfo),
   hideAll: () => hideAllOverlays(),
   isInitialized: () => overlayState.initialized_,
 };

@@ -60,6 +60,9 @@ export const defaultSettings = {
     boostKeepMax_: true,
     boostThreshold_: 75,
   },
+  blurBackground_: {
+    enabled_: true,
+  },
   xray_: {
     enabled_: true,
     smokeOpacity_: 50,
@@ -144,6 +147,10 @@ const settingsKeys = {
     enemyCheck_: '󠄾',
     enemyDistance_: '󠄿',
     boostKeepMax_: '󠅀',
+  },
+  blurBackground_: {
+    _k: '󠅁󠅂',
+    enabled_: '󠅃',
   },
   xray_: {
     _k: '󠅔',

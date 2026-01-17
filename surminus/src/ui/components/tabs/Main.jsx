@@ -62,7 +62,7 @@ const Main = ({ settings, onSettingChange }) => {
         />
         <Checkbox
           id="attack-allies"
-          label="Follow Teammates"
+          label="Attack Allies"
           checked={settings.meleeLock_.attackAllies_}
           onChange={(v) => onSettingChange((s) => (s.meleeLock_.attackAllies_ = v))}
           warning={true}
@@ -86,7 +86,7 @@ const Main = ({ settings, onSettingChange }) => {
 
       <SectionTitle
         icon={Icons.SemiAuto_}
-        label="BumpFire"
+        label="Semi Auto"
         enabled={settings.autoFire_.enabled_}
         onEnabledChange={(v) => onSettingChange((s) => (s.autoFire_.enabled_ = v))}
       />

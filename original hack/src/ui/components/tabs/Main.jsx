@@ -158,6 +158,13 @@ const Main = ({ settings, onSettingChange }) => {
           onChange={(v) => onSettingChange((s) => (s.autoHeal_.enemyDistance_ = v))}
         />
       </div>
+
+      <SectionTitle
+        icon={Icons.Maximize_}
+        label="Blur Background"
+        enabled={settings.blurBackground_.enabled_}
+        onEnabledChange={(v) => onSettingChange((s) => (s.blurBackground_.enabled_ = v))}
+      />
     </div>
   );
 };

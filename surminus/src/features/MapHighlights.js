@@ -7,22 +7,20 @@ import { settings } from '@/core/state.js';
 import { outer } from '@/core/outer.js';
 
 // Exact object types from Exotic Cheat Client (decoded_strings.json lines 791-806)
-// Mosin Trees are tree_03 variants from different maps (survev map defs)
 const SPECIAL_OBJECTS = [
   'container_01',
   'barn_02',
   'stone_01',
   'tree_01',
-  'tree_03',      // Mosin Tree - Base
-  'tree_03cb',    // Mosin Tree - Cobalt
-  'tree_03d',     // Mosin Tree - Desert
-  'tree_03f',     // Mosin Tree - Faction
-  'tree_03h',     // Mosin Tree - Halloween
-  'tree_03sp',    // Mosin Tree - Spring
-  'tree_03su',    // Mosin Tree - Summer
-  'tree_03sv',    // Mosin Tree - Savannah
-  'tree_03w',     // Mosin Tree - Woods
-  'tree_03bh',    // Mosin Tree - Beach (alternative name)
+  'tree_03',      // Mosin Tree
+  'tree_03cb',    // Mosin Tree variant
+  'tree_03d',     // Mosin Tree variant
+  'tree_03f',     // Mosin Tree variant
+  'tree_03h',     // Mosin Tree variant
+  'tree_03sp',    // Mosin Tree variant (Sapin)
+  'tree_03su',    // Mosin Tree variant
+  'tree_03sv',    // Mosin Tree variant (SV!)
+  'tree_03w',     // Mosin Tree variant
   'stone_04',     // Special stone
   'stone_05',     // Special stone
   'bunker_storm_01'
@@ -34,16 +32,15 @@ const COLORS = {
   'barn_02': 0x00FFFF,          // Cyan
   'stone_01': 0x888888,         // Gray
   'tree_01': 0xFF0000,          // Red
-  'tree_03': 0xFFFFFF,          // WHITE - Mosin Tree Base
-  'tree_03cb': 0xFFFFFF,        // WHITE - Mosin Tree Cobalt
-  'tree_03d': 0xFFFFFF,         // WHITE - Mosin Tree Desert
-  'tree_03f': 0xFFFFFF,         // WHITE - Mosin Tree Faction
-  'tree_03h': 0xFFFFFF,         // WHITE - Mosin Tree Halloween
-  'tree_03sp': 0xFFFFFF,        // WHITE - Mosin Tree Spring
-  'tree_03su': 0xFFFFFF,        // WHITE - Mosin Tree Summer
-  'tree_03sv': 0xFFFFFF,        // WHITE - Mosin Tree Savannah
-  'tree_03w': 0xFFFFFF,         // WHITE - Mosin Tree Woods
-  'tree_03bh': 0xFFFFFF,        // WHITE - Mosin Tree Beach
+  'tree_03': 0xFF0000,          // RED - Mosin Tree
+  'tree_03cb': 0xFF0000,
+  'tree_03d': 0xFF0000,
+  'tree_03f': 0xFF0000,
+  'tree_03h': 0xFF0000,
+  'tree_03sp': 0xFF00FF,        // Magenta for sapin variant
+  'tree_03su': 0xFF0000,
+  'tree_03sv': 0xFFD700,        // GOLD for SV variant
+  'tree_03w': 0xFF0000,
   'stone_04': 0xFF00FF,         // Magenta
   'stone_05': 0xFF00FF,         // Magenta
   'bunker_storm_01': 0x9900FF   // Purple
@@ -64,7 +61,6 @@ const SCALES = {
   'tree_03su': 20,
   'tree_03sv': 20,
   'tree_03w': 20,
-  'tree_03bh': 20,
   'stone_04': 6,
   'stone_05': 6,
   'bunker_storm_01': 2

@@ -20,7 +20,7 @@ const isSlowFiringWeapon = (weaponType) => {
   try {
     const weapon = gameObjects[weaponType];
     return (
-      (weapon.fireMode === 'single' || weapon.fireMode === 'burst') && weapon.fireDelay >= 0.25
+      (weapon.fireMode === 'single' || weapon.fireMode === 'burst') && weapon.fireDelay >= 0.2
     );
   } catch {
     return false;

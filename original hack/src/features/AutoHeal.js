@@ -2,7 +2,6 @@ import { gameManager, settings, inputState } from '@/core/state.js';
 import { translations } from '@/core/obfuscatedNameTranslator.js';
 import { isGameReady, inputCommands, findTeam } from '@/utils/constants.js';
 import { autoFireEnabled } from '@/features/AutoFire.js';
-import { isEnemyBehindWall } from '@/features/Aimbot.js';
 
 let initialized = false;
 
@@ -168,12 +167,11 @@ function isEnemyNear(game, me, threshold) {
     const dist = Math.hypot(pPos.x - mePos.x, pPos.y - mePos.y);
 
     if (dist < threshold) {
-      // Check if enemy is behind wall or in different layer (cave/underground)
-      const isBehindWall = isEnemyBehindWall(me, p);
+      // Check if enemy is in different layer (cave/underground)
       const isDifferentLayer = p.layer !== undefined && p.layer !== meLayer;
       
-      // Enemy is only a threat if visible (not behind wall and same layer)
-      if (!isBehindWall && !isDifferentLayer) {
+      // Enemy is only a threat if same layer
+      if (!isDifferentLayer) {
         return true;
       }
     }

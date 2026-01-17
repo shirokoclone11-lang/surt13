@@ -16,6 +16,7 @@ import {
   Circle,
   PenLine,
   Activity,
+  Maximize,
 } from 'lucide-preact';
 
 const Surplus = (props) => (
@@ -44,6 +45,7 @@ export const Icons = {
   ESP_: Radio,
   InfiniteZoom_: ZoomIn,
   AutoHeal_: Activity,
+  BlurBackground_: Maximize,
   Help_: HelpCircle,
   Community_: Users,
   Website_: Globe,

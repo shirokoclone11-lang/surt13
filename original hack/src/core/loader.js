@@ -5,6 +5,7 @@ import grenadeTimer from '@/features/GrenadeTimer.js';
 import autoFire, { autoFireEnabled } from '@/features/AutoFire.js';
 import aimbot from '@/features/Aimbot.js';
 import autoHeal from '@/features/AutoHeal.js';
+import blurBackground from '@/features/BlurBackground.js';
 import mapHighlights from '@/features/MapHighlights.js';
 import autoSwitch from '@/features/AutoSwitch.js';
 import layerSpoof from '@/features/LayerSpoofer.js';
@@ -35,6 +36,7 @@ const loadStaticPlugins = () => {
   infiniteZoom();
   autoFire();
   autoHeal();
+  blurBackground();
   mapHighlights();
 };
 

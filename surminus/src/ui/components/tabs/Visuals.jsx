@@ -96,13 +96,6 @@ const Visuals = ({ settings, onSettingChange }) => {
       </div>
 
       <SectionTitle
-        icon={Icons.Aimbot_}
-        label="Aimbot HUD"
-        enabled={settings.aimbotHud_.enabled_}
-        onEnabledChange={(v) => onSettingChange((s) => (s.aimbotHud_.enabled_ = v))}
-      />
-
-      <SectionTitle
         icon={Icons.Spinbot_}
         label="Spinbot"
         keybind={settings.keybinds_.toggleSpinbot_}
@@ -116,7 +109,7 @@ const Visuals = ({ settings, onSettingChange }) => {
           id="spinbot-speed"
           label="Speed"
           min={0}
-          max={200}
+          max={100}
           value={settings.spinbot_.speed_}
           onChange={(v) => onSettingChange((s) => (s.spinbot_.speed_ = v))}
         />
@@ -189,21 +182,6 @@ const Visuals = ({ settings, onSettingChange }) => {
           }}
         />
       </div>
-      <SectionTitle
-        icon={Icons.Misc_}
-        label="Layer Spoof"
-        keybind={settings.keybinds_.toggleLayerSpoof_}
-        keybindEditable={true}
-        onKeybindChange={(newKey) => onSettingChange((s) => (s.keybinds_.toggleLayerSpoof_ = newKey))}
-        enabled={settings.layerSpoof_.enabled_}
-        onEnabledChange={(v) => onSettingChange((s) => (s.layerSpoof_.enabled_ = v))}
-      />
-      <SectionTitle
-        icon={Icons.InfiniteZoom_}
-        label="Infinite Zoom"
-        enabled={settings.infiniteZoom_.enabled_}
-        onEnabledChange={(v) => onSettingChange((s) => (s.infiniteZoom_.enabled_ = v))}
-      />
       <SectionTitle
         icon={Icons.Laser_}
         label="Pan Hero"

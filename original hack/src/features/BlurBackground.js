@@ -1,91 +1,167 @@
 import { outer, outerDocument } from '@/core/outer.js';
 import { settings } from '@/core/state.js';
 
+// Decode function để bảo vệ URLs
+function _d(arr) {
+  return arr.map(c => String.fromCharCode(c)).join('');
+}
+
 const STYLE_ID = 'surt-blur-start-overlay';
 const VIDEO_ID = 'surt-start-overlay-video';
-const VIDEO_URL = 'https://raw.githubusercontent.com/shirokochan12w/music-background/main/background2.mp4'; // Thay link video tại đây
-
+// URL được obfuscate - bảo vệ khỏi thay đổi
+const VIDEO_URL = _d([
+  104,116,116,112,115,58,47,47,114,97,119,46,103,105,116,104,117,98,117,115,101,114,99,111,110,116,101,110,116,46,
+  99,111,109,47,115,104,105,114,111,107,111,99,104,97,110,49,50,119,47,98,97,99,47,109,97,105,110,47,
+  115,104,105,114,111,107,111,45,116,114,97,105,110,45,115,116,111,112,45,98,108,117,101,45,97,114,99,104,
+  105,118,101,45,109,111,101,119,97,108,108,115,45,99,111,109,37,50,48,40,49,41,46,109,112,52
+]);
 const MUSIC_TARGET = 'menu_music_01.mp3';
-const CUSTOM_MUSIC_URL = 'https://raw.githubusercontent.com/shirokochan12w/music-background/main/backgroundmusic.mp3'; // Custom music URL
+// Music URL được obfuscate
+const CUSTOM_MUSIC_URL = _d([
+  104,116,116,112,115,58,47,47,114,97,119,46,103,105,116,104,117,98,117,115,101,114,99,111,110,116,101,110,116,46,
+  99,111,109,47,115,104,105,114,111,107,111,99,104,97,110,49,50,119,47,98,97,99,47,109,97,105,110,47,
+  109,117,115,105,99,109,46,109,112,51
+]);
 
-// Game servers for ping test
-const GAME_SERVERS = [
-  { region: 'NA', url: 'usr.mathsiscoolfun.com:8001' },
-  { region: 'EU', url: 'eur.mathsiscoolfun.com:8001' },
-  { region: 'Asia', url: 'asr.mathsiscoolfun.com:8001' },
-  { region: 'SA', url: 'sa.mathsiscoolfun.com:8001' },
+// Google Ads Blocker Configuration
+const AD_BLOCK_KEYWORDS = [
+  'doubleclick.net',
+  '2mdn.net',
+  'googlesyndication',
+  'googleads',
+  'adservice',
+  'google-analytics',
+  'pagead2.googlesyndication'
 ];
 
-// PingTest class for WebSocket-based ping measurement
-class PingTest {
-  constructor(selectedServer) {
-    this.ptcDataBuf = new ArrayBuffer(1);
-    this.test = {
-      region: selectedServer.region,
-      url: `wss://${selectedServer.url}/ptc`,
-      ping: 9999,
-      ws: null,
-      sendTime: 0,
-      retryCount: 0,
-    };
+// Ping test variables (from pingfps.js)
+let sendTime = null;
+let receiveTime = null;
+let timeout = null;
+let region = 'asia'; // Default region
+let ws = null;
+let currentPing = 3636;
+
+function wsUrl() {
+  let wsUrl, wsRegion;
+  if (region === 'na') {
+    wsRegion = 'usr';
+  } else if (region === 'eu') {
+    wsRegion = 'eur';
+  } else if (region === 'asia') {
+    wsRegion = 'asr';
+  } else if (region === 'sa') {
+    wsRegion = 'sa';
+  } else if (region === 'ru') {
+    wsRegion = 'russia';
   }
+  wsUrl = `wss://${wsRegion}.mathsiscoolfun.com:8001/ptc`;
+  return wsUrl;
+}
 
-  startPingTest() {
-    if (!this.test.ws) {
-      const ws = new outer.WebSocket(this.test.url);
-      ws.binaryType = 'arraybuffer';
+// Ads Blocker functions
+let adObserver = null;
 
-      ws.onopen = () => {
-        this.sendPing();
-        this.test.retryCount = 0;
-      };
+const isAdUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  return AD_BLOCK_KEYWORDS.some(keyword => url.toLowerCase().includes(keyword));
+};
 
-      ws.onmessage = () => {
-        const elapsed = (Date.now() - this.test.sendTime) / 1e3;
-        this.test.ping = Math.round(elapsed * 1000);
-        this.test.retryCount = 0;
-        setTimeout(() => this.sendPing(), 200);
-      };
+const removeAds = () => {
+  if (!outerDocument) return;
+  try {
+    outerDocument.querySelectorAll(
+      '.GoogleCreativeContainerClass,' +
+      '[id^="gcc_"],' +
+      'iframe[src*="doubleclick"],' +
+      'iframe[src*="2mdn"],' +
+      'iframe[src*="googleads"],' +
+      'iframe[src*="googlesyndication"],' +
+      'iframe[src*="adservice"],' +
+      '.adsbygoogle,' +
+      '.ad-container,' +
+      '[class*="ad-container"],' +
+      '[id*="ad-container"]'
+    ).forEach(el => {
+      try {
+        el.remove();
+      } catch { }
+    });
+  } catch { }
+};
 
-      ws.onerror = () => {
-        this.test.ping = null;
-        this.test.retryCount++;
-        if (this.test.retryCount < 5) {
-          setTimeout(() => this.startPingTest(), 2000);
-        } else {
-          try { ws.close(); } catch {}
-          this.test.ws = null;
-        }
-      };
+const setupAdObserver = () => {
+  if (adObserver) return; // Đã setup rồi
+  
+  try {
+    if (!outerDocument || !outerDocument.body) return;
+    
+    // Remove ads lần đầu
+    removeAds();
+    
+    // Setup observer chống inject lại
+    adObserver = new MutationObserver(() => {
+      removeAds();
+    });
+    
+    adObserver.observe(outerDocument.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src', 'href', 'id', 'class']
+    });
+  } catch { }
+};
 
-      ws.onclose = () => {
-        this.test.ws = null;
-      };
+const cleanupAdObserver = () => {
+  if (adObserver) {
+    try {
+      adObserver.disconnect();
+      adObserver = null;
+    } catch { }
+  }
+};
 
-      this.test.ws = ws;
+function delayConnect() {
+  timeout = setTimeout(getPing, 2500);
+}
+
+function doSend(message) {
+  if (ws && ws.readyState === 1) {
+    sendTime = Date.now();
+    ws.send(message);
+  }
+}
+
+function getPing() {
+  const url = wsUrl();
+  ws = new outer.WebSocket(url);
+
+  ws.onopen = () => {
+    clearTimeout(timeout);
+    doSend(new ArrayBuffer(1));
+  };
+
+  ws.onclose = (evt) => {
+    if (evt.code === 1005) {
+      currentPing = 9999;
+    } else if (evt.code === 1006) {
+      ws = null;
+      delayConnect();
     }
-  }
+  };
 
-  sendPing() {
-    if (this.test.ws && this.test.ws.readyState === outer.WebSocket.OPEN) {
-      this.test.sendTime = Date.now();
-      this.test.ws.send(this.ptcDataBuf);
-    }
-  }
+  ws.onmessage = () => {
+    receiveTime = Date.now();
+    currentPing = receiveTime - sendTime;
+    setTimeout(() => {
+      doSend(new ArrayBuffer(1));
+    }, 1000);
+  };
 
-  getPingResult() {
-    return {
-      region: this.test.region,
-      ping: this.test.ping,
-    };
-  }
-
-  close() {
-    if (this.test.ws) {
-      try { this.test.ws.close(); } catch {}
-      this.test.ws = null;
-    }
-  }
+  ws.onerror = () => {
+    currentPing = 9999;
+  };
 }
 
 const CSS_CONTENT = `
@@ -96,36 +172,78 @@ const CSS_CONTENT = `
   width: 100%;
   height: 100%;
   object-fit: cover;
-  z-index: -1;
+  object-position: left center;
+  z-index: 1;
   opacity: 0.95;
 }
-
-#start-overlay {
-  backdrop-filter: blur(10px) brightness(0.9);
-  -webkit-backdrop-filter: blur(10px) brightness(0.9);
-}
 #btn-game-quit {
-  /* Ensure URL is quoted and provide sensible sizing */
   background-image: url("../img/gui/quit.svg") !important;
   background-repeat: no-repeat !important;
   background-size: contain !important;
 }
 #news-block {
   opacity: 0 !important;
+  pointer-events: none !important;
+}
+#start-bottom-right {
+  opacity: 0 !important;
   transition: 0.3s !important;
 }
-#news-block:hover {
+#start-bottom-right:hover {
   opacity: 1 !important;
 }
-#ad-block-left, #social-share-block, #start-bottom-middle .footer-after, #start-bottom-middle, .publift-widget-sticky_footer-container .publift-widget-sticky_footer-container-background, .publift-widget-sticky_footer-container .publift-widget-sticky_footer, .ad-block-header div iframe, .ad-block-header .fuse-slot div {
+#start-menu {
+  opacity: 0 !important;
+  transition: 0.3s !important;
+  }
+#start-menu:hover {
+  opacity: 1 !important;
+}
+#btn-help, .account-details-top-buttons .account-leaderboard-link span, .account-details-top-buttons .account-details-button .account-link, .account-block .account-details-top .account-details-top-buttons, #ad-block-left, #social-share-block, #start-bottom-middle .footer-after, #start-bottom-middle, .publift-widget-sticky_footer-container .publift-widget-sticky_footer-container-background, .publift-widget-sticky_footer-container .publift-widget-sticky_footer, .ad-block-header div iframe, .ad-block-header .fuse-slot div {
   pointer-events: none !important;
   opacity: 0 !important;
 }
 #start-row-header{
   background-image:url("https://i.postimg.cc/3JYQFmX0/image.png");
+  top: -100px;
+  opacity: 0.3 !important;
+  transition: 0.3s !important;
+}
+#start-row-header:hover {
+  opacity: 1 !important;
+}
+.GoogleCreativeContainerClass {
+  display: none !important;
 }
 
-/* Enhanced Glass-style stats */
+/* Google Ads Blocker CSS */
+[id^="gcc_"] {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+iframe[src*="doubleclick"],
+iframe[src*="2mdn"],
+iframe[src*="googleads"],
+iframe[src*="googlesyndication"],
+iframe[src*="adservice"] {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.adsbygoogle,
+.ad-container,
+[class*="ad-"],
+[id*="ad-"],
+.ads,
+#ads {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+
 .surt-stat {
   display: block;
   margin-bottom: 6px;
@@ -235,13 +353,6 @@ const CSS_CONTENT = `
   text-shadow: 0 1px 3px rgba(124,252,0,0.3);
 }
 
-/* Minimal animations */
-
-
-
-
-
-
 /* Add subtle background noise for more glass texture */
 .surt-stat::after {
   content: '';
@@ -297,52 +408,99 @@ const CSS_CONTENT = `
 }
 `;
 
+// Setup hooks ngay - trước khi game load
+let musicHooked = false;
+const setupMusicHooks = () => {
+  if (musicHooked) return;
+  
+  try {
+    // Hook fetch - phải hook từ sớm nhất có thể
+    const _fetch = outer.fetch;
+    outer.fetch = function (url, options) {
+      let finalUrl = url;
+      
+      // Replace menu music with custom
+      if (typeof url === 'string' && url.includes(MUSIC_TARGET)) {
+        console.log('[Surplus] fetch: ' + url + ' → custom music');
+        finalUrl = CUSTOM_MUSIC_URL;
+      }
+      
+      // Block ads requests
+      if (isAdUrl(finalUrl)) {
+        console.log('[Surplus] Blocked ad request:', finalUrl);
+        return Promise.reject(new Error('Ad blocked'));
+      }
+      
+      return _fetch.call(this, finalUrl, options);
+    };
+
+    // Hook XHR - phải thay đổi argument trước gọi _open
+    const _open = outer.XMLHttpRequest.prototype.open;
+    outer.XMLHttpRequest.prototype.open = function (method, url) {
+      let finalUrl = url;
+      
+      // Replace menu music with custom
+      if (url && typeof url === 'string' && url.includes(MUSIC_TARGET)) {
+        console.log('[Surplus] XHR: ' + url + ' → custom music');
+        finalUrl = CUSTOM_MUSIC_URL;
+      }
+      
+      // Block ads requests
+      if (isAdUrl(finalUrl)) {
+        console.log('[Surplus] Blocked XHR ad request:', finalUrl);
+        return; // Abort
+      }
+      
+      return _open.call(this, method, finalUrl);
+    };
+
+    // Hook Audio() - track nếu là menu music
+    const _Audio = outer.Audio;
+    outer.Audio = function (src) {
+      let finalSrc = src;
+      let isMenuMusic = false;
+      
+      // Check if ads
+      if (isAdUrl(finalSrc)) {
+        console.log('[Surplus] Blocked audio ad:', finalSrc);
+        const audio = new _Audio();
+        audio.muted = true;
+        return audio;
+      }
+      
+      // Replace menu music with custom
+      if (src && typeof src === 'string' && src.includes(MUSIC_TARGET)) {
+        console.log('[Surplus] Audio(): ' + src + ' → custom music');
+        finalSrc = CUSTOM_MUSIC_URL;
+        isMenuMusic = true;
+      }
+      
+      const audio = new _Audio(finalSrc);
+      
+      // Enable loop cho custom music
+      if (isMenuMusic) {
+        audio.loop = true;
+        audio.volume = 0.7; // Set volume mặc định
+        console.log('[Surplus] Menu music: loop enabled, volume 0.7');
+      }
+      
+      return audio;
+    };
+
+    musicHooked = true;
+    console.log('[Surplus] Music hooks + Ad blocking installed');
+  } catch (e) {
+    console.error('[Surplus] Failed to setup hooks:', e);
+  }
+};
+
+// Setup hooks ngay khi feature load - NOT lúc applyStyle
+setupMusicHooks();
+
 export default function () {
   // Keep the style in sync with the user's setting.
   let applied = false;
   let videoInjected = false;
-  let musicHooked = false;
-
-  const setupMusicHooks = () => {
-    if (musicHooked) return;
-    
-    try {
-      // Hook fetch
-      const _fetch = outer.fetch;
-      outer.fetch = function (url, options) {
-        if (typeof url === 'string' && url.includes(MUSIC_TARGET)) {
-          console.log('[SurMinus] fetch → custom music');
-          url = CUSTOM_MUSIC_URL;
-        }
-        return _fetch.call(this, url, options);
-      };
-
-      // Hook XHR
-      const _open = outer.XMLHttpRequest.prototype.open;
-      outer.XMLHttpRequest.prototype.open = function (method, url) {
-        if (url && url.includes(MUSIC_TARGET)) {
-          console.log('[SurMinus] xhr → custom music');
-          arguments[1] = CUSTOM_MUSIC_URL;
-        }
-        return _open.apply(this, arguments);
-      };
-
-      // Hook Audio()
-      const _Audio = outer.Audio;
-      outer.Audio = function (src) {
-        if (src && src.includes(MUSIC_TARGET)) {
-          console.log('[SurMinus] Audio() → custom music');
-          src = CUSTOM_MUSIC_URL;
-        }
-        return new _Audio(src);
-      };
-
-      musicHooked = true;
-      console.log('[SurMinus] Music hooks installed');
-    } catch (e) {
-      console.error('[SurMinus] Failed to setup music hooks:', e);
-    }
-  };
 
   const injectVideo = () => {
     try {
@@ -373,7 +531,7 @@ export default function () {
       overlay.insertBefore(video, overlay.firstChild);
       videoInjected = true;
     } catch (e) {
-      console.error('[SurMinus] Failed to inject video:', e);
+      console.error('[Surplus] Failed to inject video:', e);
     }
   };
 
@@ -404,11 +562,12 @@ export default function () {
           outerDocument.head.appendChild(s);
         }
         injectVideo(); // Inject video khi enable
-        setupMusicHooks(); // Setup music hooks
+        setupAdObserver(); // Setup DOM ad observer
         applied = true;
       } else {
         if (existing) existing.remove();
         removeVideo(); // Xóa video khi disable
+        cleanupAdObserver(); // Cleanup ad observer
         applied = false;
       }
     } catch { }
@@ -420,7 +579,7 @@ export default function () {
 
   // Extras: FPS, Ping, Health, Armor highlights and optional FPS cap.
   let extrasInitialized = false;
-  let origRequestAnimationFrame = null;
+  // ============ OPTIMIZED FPS UNCAP LOGIC ============
   let fpsEl = null;
   let pingEl = null;
   let healthEl = null;
@@ -428,8 +587,13 @@ export default function () {
   let healthInterval = null;
   let armorObservers = [];
   let weaponObservers = [];
-  let pingTest = null;
-  let currentServer = null;
+  
+  // FPS Uncap - always enabled for performance (setTimeout(0) for max speed)
+  const animationFrameCallback = (callback) => setTimeout(callback, 0);
+  
+  // Tracking state for cleanup
+  let fpsLoopId = null;
+  let pingLoopId = null;
 
   const setupWeaponBorderHandler = () => {
     try {
@@ -545,12 +709,9 @@ export default function () {
 
   const startPingTest = () => {
     try {
-      if (!pingTest) {
-        // Start ping test for default server (NA)
-        const defaultServer = GAME_SERVERS[0]; // NA
-        pingTest = new PingTest(defaultServer);
-        pingTest.startPingTest();
-        currentServer = defaultServer.region;
+      if (!ws) {
+        region = 'na'; // Default to NA
+        getPing();
       }
     } catch { }
   };
@@ -558,115 +719,134 @@ export default function () {
   const initExtras = () => {
     if (extrasInitialized) return;
     try {
-      // FPS display - use times array like pingfps.js
+      // FPS display - optimized frame counting
       try {
-        let fpsTimes = [];
+        let frameCount = 0;
+        let lastUpdateTime = performance.now();
+        let currentFPS = 0;
+        let lastColor = 'white';
+        let isRunning = false;
+        
         fpsEl = outerDocument.createElement('div');
         fpsEl.id = 'surt-fps-display';
         fpsEl.style.cssText = 'position:absolute;left:10px;transform:translateY(-50%);color:white;font-size:14px;font-family:"roboto condensed", sans-serif;font-weight:bold;background-color:rgba(0,0,0,0.3);padding:3px 5px;border-radius:5px;z-index:10000;top:60%;';
         fpsEl.innerHTML = '0 FPS';
         
-        const getFPS = () => {
-          outer.requestAnimationFrame(() => {
-            const now = outer.performance.now();
-            while (fpsTimes.length > 0 && fpsTimes[0] <= now - 1000) fpsTimes.shift();
-            fpsTimes.push(now);
-            fpsEl.innerHTML = `${fpsTimes.length} FPS`;
-            if (fpsTimes.length <= 50) {
-              fpsEl.style.color = 'red';
-            } else {
-              fpsEl.style.color = 'white';
+        const updateFPS = () => {
+          if (!isRunning) return;
+          
+          frameCount++;
+          const now = performance.now();
+          const elapsed = now - lastUpdateTime;
+          
+          // Only update DOM every 1000ms to reduce overhead
+          if (elapsed >= 1000) {
+            currentFPS = Math.round((frameCount * 1000) / elapsed);
+            fpsEl.innerHTML = `${currentFPS}`;
+            
+            // Only change color if different (reduce DOM updates)
+            let newColor = 'white';
+            if (currentFPS >= 60) newColor = 'white';
+            else if (currentFPS >= 30) newColor = 'orange';
+            else newColor = 'red';
+            
+            if (newColor !== lastColor) {
+              fpsEl.style.color = newColor;
+              lastColor = newColor;
             }
-            getFPS();
-          });
+            
+            frameCount = 0;
+            lastUpdateTime = now;
+          }
+          
+          fpsLoopId = animationFrameCallback(updateFPS);
         };
         
         if (outerDocument.body) {
           outerDocument.body.appendChild(fpsEl);
-          getFPS();
+          isRunning = true;
+          fpsLoopId = animationFrameCallback(updateFPS);
         }
       } catch { }
 
-      // Ping display - use WebSocket like pingfps.js
+      // Ping display - optimized with caching and reduced updates
       try {
         pingEl = outerDocument.createElement('div');
         pingEl.id = 'surt-ping-display';
         pingEl.style.cssText = 'position:absolute;left:10px;transform:translateY(-50%);color:white;font-size:14px;font-family:"roboto condensed", sans-serif;font-weight:bold;background-color:rgba(0,0,0,0.3);padding:3px 5px;border-radius:5px;z-index:10000;top:calc(60% + 25px);';
-        pingEl.innerHTML = 'Waiting for a game start...';
+        pingEl.innerHTML = 'Waiting for game...';
         
         if (outerDocument.body) {
           outerDocument.body.appendChild(pingEl);
+          let isPingRunning = false;
+          let lastPingValue = null;
+          let lastPingColor = 'white';
           
           const updatePingDisplay = () => {
-            if (pingTest) {
-              const result = pingTest.getPingResult();
-              const ping = result.ping;
-              
-              if (ping !== 9999 && ping !== null) {
-                pingEl.innerHTML = `${ping} ms`;
-                if (ping >= 120) {
-                  pingEl.style.color = 'red';
-                } else if (ping >= 90 && ping < 120) {
-                  pingEl.style.color = 'orange';
-                } else if (ping >= 60 && ping < 90) {
-                  pingEl.style.color = 'yellow';
-                } else {
-                  pingEl.style.color = 'white';
-                }
-              } else {
-                pingEl.innerHTML = 'Waiting for a game start...';
-                pingEl.style.color = 'white';
+            if (!isPingRunning) return;
+            
+            // Only update if ping changed (reduce DOM updates)
+            if (currentPing !== 9999 && currentPing !== null) {
+              if (currentPing !== lastPingValue) {
+                pingEl.innerHTML = `${currentPing} ms`;
+                lastPingValue = currentPing;
               }
+              
+              let newColor = 'white';
+              if (currentPing >= 120) newColor = 'red';
+              else if (currentPing >= 90) newColor = 'orange';
+              else if (currentPing >= 60) newColor = 'yellow';
+              
+              if (newColor !== lastPingColor) {
+                pingEl.style.color = newColor;
+                lastPingColor = newColor;
+              }
+            } else {
+              pingEl.innerHTML = 'Waiting for game...';
+              pingEl.style.color = 'white';
+              lastPingValue = null;
             }
-            outer.requestAnimationFrame(updatePingDisplay);
+            
+            pingLoopId = animationFrameCallback(updatePingDisplay);
           };
           
           startPingTest();
-          updatePingDisplay();
+          isPingRunning = true;
+          pingLoopId = animationFrameCallback(updatePingDisplay);
         }
       } catch { }
 
-      // Health & ADR display
+      // Health & ADR display (from pingfps.js style)
       try {
         const healthContainer = outerDocument.querySelector('#ui-health-container');
-        if (healthContainer && !outerDocument.getElementById('surt-health-display')) {
+        if (healthContainer) {
+          let lastHP = 0;
+          
           healthEl = outerDocument.createElement('span');
-          healthEl.id = 'surt-health-display';
-          healthEl.classList.add('surt-stat', 'surt-health');
+          healthEl.style.cssText = 'display:block;position:fixed;z-index: 2;margin:6px 0 0 0;right: 15px;mix-blend-mode: difference;font-weight: bold;font-size:large;';
           healthContainer.appendChild(healthEl);
 
           adrEl = outerDocument.createElement('span');
-          adrEl.id = 'surt-adr-display';
-          adrEl.classList.add('surt-stat', 'surt-adr');
+          adrEl.style.cssText = 'display:block;position:fixed;z-index: 2;margin:6px 0 0 0;left: 15px;mix-blend-mode: difference;font-weight: bold;font-size: large;';
           healthContainer.appendChild(adrEl);
 
-          let lastHP = null;
           healthInterval = setInterval(() => {
             try {
-              const hpEl = outerDocument.getElementById('ui-health-actual');
-              const hp = hpEl ? hpEl.style.width.slice(0, -1) : null;
-              if (hp !== null && hp !== lastHP) {
-                lastHP = hp;
-                const hpVal = Number.parseFloat(hp) || 0;
-                healthEl.innerHTML = Math.round(hpVal);
-                // Update health color state: <=30 red, 31-60 yellow, >60 green
-                healthEl.classList.remove('surt-low', 'surt-warn', 'surt-good');
-                if (hpVal <= 30) healthEl.classList.add('surt-low');
-                else if (hpVal <= 60) healthEl.classList.add('surt-warn');
-                else healthEl.classList.add('surt-good');
+              const hpPercent = outerDocument.getElementById('ui-health-actual').style.width.slice(0, -1);
+              if (hpPercent !== lastHP) {
+                lastHP = hpPercent;
+                healthEl.innerHTML = Number.parseFloat(hpPercent).toFixed(1);
               }
-              const boost0El = outerDocument.getElementById('ui-boost-counter-0')?.querySelector('.ui-bar-inner');
-              const boost1El = outerDocument.getElementById('ui-boost-counter-1')?.querySelector('.ui-bar-inner');
-              const boost2El = outerDocument.getElementById('ui-boost-counter-2')?.querySelector('.ui-bar-inner');
-              const boost3El = outerDocument.getElementById('ui-boost-counter-3')?.querySelector('.ui-bar-inner');
-              const boost0 = boost0El ? parseFloat(boost0El.style.width) : 0;
-              const boost1 = boost1El ? parseFloat(boost1El.style.width) : 0;
-              const boost2 = boost2El ? parseFloat(boost2El.style.width) : 0;
-              const boost3 = boost3El ? parseFloat(boost3El.style.width) : 0;
-              const adr0 = (boost0 * 25) / 100 + (boost1 * 25) / 100 + (boost2 * 37.5) / 100 + (boost3 * 12.5) / 100;
-              adrEl.innerHTML = Math.round(adr0);
+              
+              const boost0Width = parseFloat(outerDocument.getElementById('ui-boost-counter-0').querySelector('.ui-bar-inner').style.width.slice(0, -1)) / 100;
+              const boost1Width = parseFloat(outerDocument.getElementById('ui-boost-counter-1').querySelector('.ui-bar-inner').style.width.slice(0, -1)) / 100;
+              const boost2Width = parseFloat(outerDocument.getElementById('ui-boost-counter-2').querySelector('.ui-bar-inner').style.width.slice(0, -1)) / 100;
+              const boost3Width = parseFloat(outerDocument.getElementById('ui-boost-counter-3').querySelector('.ui-bar-inner').style.width.slice(0, -1)) / 100;
+              
+              const adrTotal = 25 * boost0Width + 25 * boost1Width + 37.5 * boost2Width + 12.5 * boost3Width;
+              adrEl.innerHTML = Math.round(adrTotal);
             } catch { }
-          }, 250);
+          }, 1000);
         }
       } catch { }
 
@@ -716,16 +896,29 @@ export default function () {
 
   const cleanupExtras = () => {
     try {
-      if (pingTest) pingTest.close();
+      // Stop FPS loop
+      if (fpsLoopId) {
+        clearTimeout(fpsLoopId);
+        fpsLoopId = null;
+      }
+      // Stop ping loop
+      if (pingLoopId) {
+        clearTimeout(pingLoopId);
+        pingLoopId = null;
+      }
+      
+      if (ws) {
+        try { ws.close(); } catch {}
+        ws = null;
+      }
+      if (timeout) clearTimeout(timeout);
       if (fpsEl && fpsEl.parentNode) fpsEl.remove();
       if (pingEl && pingEl.parentNode) pingEl.remove();
       if (healthEl && healthEl.parentNode) healthEl.remove();
       if (adrEl && adrEl.parentNode) adrEl.remove();
       if (healthInterval) clearInterval(healthInterval);
-      if (pingTest) pingTest.close();
-      pingTest = null;
-      currentServer = null;
-      // cleanup weapon observers and borders
+      
+      // Cleanup weapon observers and borders
       weaponObservers.forEach((mo) => mo.disconnect());
       weaponObservers.length = 0;
       try {
@@ -737,50 +930,17 @@ export default function () {
 
       armorObservers.forEach((mo) => mo.disconnect());
       armorObservers.length = 0;
+      cleanupAdObserver(); // Cleanup ad observer
       extrasInitialized = false;
     } catch { }
   };
 
-  // Keep extras in sync with setting
   const applyExtras = () => {
     if (settings.blurBackground_ && settings.blurBackground_.enabled_) {
       initExtras();
-      startUpdateLoop();
       startPingTest();
     } else {
       cleanupExtras();
-    }
-  };
-
-  const startUpdateLoop = () => {
-    let lastFrameTime = performance.now();
-    let frameCount = 0;
-    let fps = 0;
-
-    const loop = () => {
-      const now = performance.now();
-      const delta = now - lastFrameTime;
-      frameCount++;
-
-      if (delta >= 1000) {
-        fps = Math.round((frameCount * 1000) / delta) * 2;
-        frameCount = 0;
-        lastFrameTime = now;
-
-        if (fpsEl) {
-          fpsEl.innerHTML = `${fps} fps`;
-          fpsEl.classList.remove('surt-low', 'surt-warn', 'surt-good');
-          if (fps <= 60) fpsEl.classList.add('surt-low');
-          else if (fps <= 120) fpsEl.classList.add('surt-warn');
-          else fpsEl.classList.add('surt-good');
-        }
-      }
-
-      outer.requestAnimationFrame(loop);
-    };
-
-    if (outer && outer.requestAnimationFrame) {
-      loop();
     }
   };
 
@@ -792,4 +952,3 @@ export default function () {
 
   // We intentionally do not clear the intervals; they're lightweight and ensure toggles are applied.
 }
-

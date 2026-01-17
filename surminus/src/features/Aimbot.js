@@ -3,16 +3,19 @@ import { findTeam, findBullet, findWeapon, inputCommands } from '@/utils/constan
 import { gameManager } from '@/core/state.js';
 import { translations } from '@/core/obfuscatedNameTranslator.js';
 import { ref_addEventListener } from '@/core/hook.js';
-import { isLayerSpoofActive, originalLayerValue } from '@/features/LayerSpoofer.js';
 import {
   AimState,
   setAimState,
   getCurrentAimPosition,
-  getPing,
   aimOverlays,
 } from '@/core/aimController.js';
 import { outerDocument, outer } from '@/core/outer.js';
-import { v2, collisionHelpers, sameLayer } from '@/utils/math.js';
+import { v2, collisionHelpers, sameLayer, ballistics } from '@/utils/math.js';
+import { updateAutoCrateBreak } from '@/features/AutoCrateBreak.js';
+
+// ============================================================================
+// STATE & CONFIGURATION
+// ============================================================================
 
 const isBypassLayer = (layer) => layer === 2 || layer === 3;
 
@@ -21,13 +24,88 @@ const state = {
   previousEnemies_: {},
   currentEnemy_: null,
   meleeLockEnemy_: null,
+  meleeLockTargetId_: null,
+  meleeLockStartTime_: null,
   velocityBuffer_: {},
   lastTargetScreenPos_: null,
+  canAutoFire_: true,
+  isCurrentEnemyShootable_: false,
+  targetPriority_: {},
+  currentLootTarget_: null,
+  isSwitchingToMelee_: false,
+  isMeleeAutoAttacking_: false,
+  nearestGrenade_: null,
+  lastGrenadeCheckTime_: 0,
+  grenadeEvasionAngle_: null,
 };
 
-const AIM_SMOOTH_DISTANCE_PX = 6;
-const AIM_SMOOTH_ANGLE = Math.PI / 90;
+// Melee constants
 const MELEE_ENGAGE_DISTANCE = 5.5;
+const MELEE_DETECTION_DISTANCE = 7.5;
+const MELEE_LOCK_HYSTERESIS = 1.0;
+const MELEE_PREDICTION_TIME = 0.15;
+
+// Grenade constants
+const GRENADE_EXPLOSION_RADIUS = 15;
+const GRENADE_SAFE_DISTANCE = GRENADE_EXPLOSION_RADIUS + 20;
+const GRENADE_EVADE_SPEED = 255;
+const GRENADE_BASE_RADIUS = 15;
+const ANTI_GRENADE_EVADE_DISTANCE = 25;
+const ANTI_GRENADE_CHECK_INTERVAL = 50;
+
+const GRENADE_EXPLOSION_PATTERNS = [
+  'frag',
+  'explosion_frag',
+  'smoke',
+  'explosion_smoke',
+  'gas',
+  'concussion',
+];
+
+const PRIMARY_BUTTON = 0;
+let tickerAttached = false;
+let meleeLockAutoAttackTickerId = null;
+
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+/**
+ * Simulate mouse down for melee attack
+ */
+function simulateMouseDown() {
+  const mouseDownEvent = new MouseEvent('mousedown', {
+    bubbles: true,
+    cancelable: true,
+    view: outer,
+    button: PRIMARY_BUTTON,
+  });
+  outer.dispatchEvent(mouseDownEvent);
+}
+
+/**
+ * Simulate mouse up to stop melee attack
+ */
+function simulateMouseUp() {
+  const mouseUpEvent = new MouseEvent('mouseup', {
+    bubbles: true,
+    cancelable: true,
+    view: outer,
+    button: PRIMARY_BUTTON,
+  });
+  outer.dispatchEvent(mouseUpEvent);
+}
+
+const getLocalLayer = (player) => {
+  if (isBypassLayer(player.layer)) return player.layer;
+  return player.layer;
+};
+
+const meetsLayerCriteria = (targetLayer, localLayer, isLocalOnBypass) => {
+  if (isBypassLayer(targetLayer)) return true;
+  return targetLayer === localLayer;
+};
 
 const computeAimAngle = (point) => {
   if (!point) return 0;
@@ -36,31 +114,23 @@ const computeAimAngle = (point) => {
   return Math.atan2(point.y - centerY, point.x - centerX);
 };
 
-const normalizeAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
+const normalizeAngle = (angle) => v2.normalizeAngle_(angle);
 
-const shouldSmoothAim = (currentPos, nextPos) => {
-  if (!nextPos) return false;
-  if (!currentPos) return true;
+const queueInput = (command) => inputState.queuedInputs_.push(command);
 
-  const distance = Math.hypot(nextPos.x - currentPos.x, nextPos.y - currentPos.y);
-  if (distance > AIM_SMOOTH_DISTANCE_PX) return true;
+const getDistance = (x1, y1, x2, y2) => v2.distanceSqr_(x1, y1, x2, y2);
 
-  const angleDiff = Math.abs(
-    normalizeAngle(computeAimAngle(nextPos) - computeAimAngle(currentPos))
-  );
-  return angleDiff > AIM_SMOOTH_ANGLE;
+const calcAngle = (playerPos, mePos) => v2.angleTowards_(playerPos, mePos);
+
+const getLevel = (id) => {
+  if (!id || typeof id !== 'string') return 0;
+  const match = id.match(/0(\d)$/);
+  return match ? parseInt(match[1]) : 0;
 };
 
-const getLocalLayer = (player) => {
-  if (isBypassLayer(player.layer)) return player.layer;
-  if (isLayerSpoofActive && originalLayerValue !== undefined) return originalLayerValue;
-  return player.layer;
-};
-
-const meetsLayerCriteria = (targetLayer, localLayer, isLocalOnBypass) => {
-  if (isBypassLayer(targetLayer) || isLocalOnBypass) return true;
-  return targetLayer === localLayer;
-};
+// ============================================================================
+// OBSTACLE & COLLISION DETECTION
+// ============================================================================
 
 const BLOCKING_OBSTACLE_PATTERNS = [
   'metal_wall_',
@@ -84,10 +154,23 @@ const BLOCKING_OBSTACLE_PATTERNS = [
   'bollard_',
   'sandbags_',
   'hedgehog',
+  'stone_01',
+  'stone_02',
+  'stone_03',
+  'stone_04',
+  'stone_05',
+  'stone_06',
+  'stone_07',
+  'stone_08',
+  'stone_09',
+  'stone_0',
+  'tree_',
+  'glass_wall_',
+  'locker_',
+  'deposit_box_',
 ];
 
 const NON_BLOCKING_OBSTACLE_PATTERNS = [
-  'tree_',
   'bush_',
   'brush_',
   'crate_',
@@ -103,9 +186,6 @@ const NON_BLOCKING_OBSTACLE_PATTERNS = [
   'table_',
   'drawers_',
   'window',
-  'glass_wall_',
-  'locker_',
-  'deposit_box_',
   'toilet_',
   'pot_',
   'planter_',
@@ -114,16 +194,7 @@ const NON_BLOCKING_OBSTACLE_PATTERNS = [
   'egg_',
   'woodpile_',
   'decal',
-  'stone_01',
-  'stone_02',
-  'stone_03',
-  'stone_04',
-  'stone_05',
-  'stone_06',
-  'stone_07',
-  'stone_08',
-  'stone_09',
-  'stone_0',
+
 ];
 
 const isObstacleBlocking = (obstacle) => {
@@ -162,8 +233,7 @@ const canCastToPlayer = (localPlayer, targetPlayer, weapon, bullet) => {
   }
 
   const BULLET_HEIGHT = 0.25;
-  const trueLayer =
-    isLayerSpoofActive && originalLayerValue !== undefined ? originalLayerValue : localPlayer.layer;
+  const trueLayer = localPlayer.layer;
 
   const playerPos = localPlayer[translations.visualPos_];
   const targetPos = targetPlayer[translations.visualPos_];
@@ -179,7 +249,11 @@ const canCastToPlayer = (localPlayer, targetPlayer, weapon, bullet) => {
 
   const maxDistance = Math.hypot(dx, dy);
 
-  const rayCount = Math.max(15, Math.ceil((weapon.shotSpread || 0) * 1.5));
+  // Improved: Adaptive ray count based on spread and distance
+  const rayCount = Math.max(
+    Math.min(30, weapon.shotSpread ? Math.ceil((weapon.shotSpread || 0) * 2) : 15),
+    Math.ceil(maxDistance / 50)
+  );
 
   const allObstacles = Object.values(idToObj).filter((obj) => {
     if (!obj.collider) return false;
@@ -195,6 +269,13 @@ const canCastToPlayer = (localPlayer, targetPlayer, weapon, bullet) => {
     return true;
   }
 
+  // Pre-calculate collision distances for all obstacles
+  const collisionCache = new Map();
+  for (const obstacle of blockingObstacles) {
+    collisionCache.set(obstacle, new Map());
+  }
+
+  let unblocked = 0;
   for (let i = 0; i < rayCount; i++) {
     const t = rayCount === 1 ? 0.5 : i / (rayCount - 1);
     const rayAngle = aimAngle - generousSpread / 2 + generousSpread * t;
@@ -204,10 +285,18 @@ const canCastToPlayer = (localPlayer, targetPlayer, weapon, bullet) => {
     let blocked = false;
 
     for (const obstacle of blockingObstacles) {
-      const collision = collisionHelpers.intersectSegment_(obstacle.collider, playerPos, endPos);
+      let collision = collisionCache.get(obstacle).get(rayAngle);
+      
+      if (collision === undefined) {
+        collision = collisionHelpers.intersectSegment_(obstacle.collider, playerPos, endPos);
+        collisionCache.get(obstacle).set(rayAngle, collision);
+      }
+      
       if (collision) {
         const distToCollision = v2.length_(v2.sub_(collision.point, playerPos));
-        if (distToCollision < maxDistance - 0.5) {
+        // Improved: Check collision within target radius, not just before target
+        const targetRadius = 0.75; // Approximate player collision radius
+        if (distToCollision < maxDistance - targetRadius) {
           blocked = true;
           break;
         }
@@ -215,60 +304,123 @@ const canCastToPlayer = (localPlayer, targetPlayer, weapon, bullet) => {
     }
 
     if (!blocked) {
-      return true;
+      unblocked++;
+      // Early exit: If majority of rays pass through, target is shootable
+      if (unblocked > rayCount * 0.4) {
+        return true;
+      }
     }
   }
 
-  return false;
+  return unblocked > rayCount * 0.3; // At least 30% of rays must pass through
 };
 
-const queueInput = (command) => inputState.queuedInputs_.push(command);
+// ============================================================================
+// POSITION PREDICTION
+// ============================================================================
 
-const handleKeydown = (event) => {
-  if (event.code !== settings.keybinds_.toggleStickyTarget_) return;
-  if (state.focusedEnemy_) {
-    state.focusedEnemy_ = null;
-    setAimState(new AimState('idle', null, null, true));
-    return;
+function predictPosition(enemy, currentPlayer) {
+  if (!enemy || !currentPlayer) return null;
+
+  const enemyPos = enemy[translations.visualPos_];
+  const currentPlayerPos = currentPlayer[translations.visualPos_];
+  
+  // Store position history for velocity calculation
+  const enemyId = enemy.__id;
+  const history = state.previousEnemies_[enemyId] ?? (state.previousEnemies_[enemyId] = []);
+  const now = performance.now();
+  
+  history.push([now, { ...enemyPos }]);
+  if (history.length > 20) history.shift();
+
+  // Need at least 3 samples for proper velocity calculation
+  if (history.length < 3) {
+    return gameManager.game[translations.camera_][translations.pointToScreen_]({
+      x: enemyPos.x,
+      y: enemyPos.y,
+    });
   }
-  if (settings.aimbot_.stickyTarget_) {
-    state.focusedEnemy_ = state.currentEnemy_;
+
+  // Calculate velocity using older position samples (surviv-cheat posOldOld method)
+  let velocityX = 0;
+  let velocityY = 0;
+  
+  // Use position from 2-3 frames ago for stability
+  const oldestIdx = Math.max(0, history.length - 3);
+  const newestIdx = history.length - 1;
+  const oldPos = history[oldestIdx][1];
+  const newPos = history[newestIdx][1];
+  const timeDiff = (history[newestIdx][0] - history[oldestIdx][0]) / 1000; // Convert to seconds
+  
+  if (timeDiff > 0.001) { // Avoid division by very small numbers
+    velocityX = (newPos.x - oldPos.x) / timeDiff;
+    velocityY = (newPos.y - oldPos.y) / timeDiff;
   }
-};
 
-Reflect.apply(ref_addEventListener, outer, ['keydown', handleKeydown]);
+  // Clamp velocity to reasonable range
+  const velMag = Math.hypot(velocityX, velocityY);
+  if (velMag > 2000) {
+    const scale = 2000 / velMag;
+    velocityX *= scale;
+    velocityY *= scale;
+  }
 
-let tickerAttached = false;
+  // Get weapon and bullet information
+  const weapon = findWeapon(currentPlayer);
+  const bullet = findBullet(weapon);
+  const bulletSpeed = bullet?.speed || 1000;
 
-function getDistance(x1, y1, x2, y2) {
-  return (x1 - x2) ** 2 + (y1 - y2) ** 2;
+  // Use optimized quadratic ballistics solver from math.js
+  // This solves: when will the bullet collide with the moving enemy?
+  const targetVel = { x: velocityX, y: velocityY };
+  const t = ballistics.quadraticIntercept_(currentPlayerPos, enemyPos, targetVel, bulletSpeed);
+  
+  if (t === null) {
+    // No valid intercept - just aim at current position
+    return gameManager.game[translations.camera_][translations.pointToScreen_](enemyPos);
+  }
+
+  // Calculate predicted position with optional prediction level smoothing
+  const predictionLevel = settings.aimbot_.predictionLevel_ ?? 1.0;
+  const predictedPos = {
+    x: enemyPos.x + velocityX * t * predictionLevel,
+    y: enemyPos.y + velocityY * t * predictionLevel,
+  };
+
+  return gameManager.game[translations.camera_][translations.pointToScreen_](predictedPos);
 }
 
-function calcAngle(playerPos, mePos) {
-  const dx = mePos.x - playerPos.x;
-  const dy = mePos.y - playerPos.y;
-
-  return Math.atan2(dy, dx);
+function getAdaptiveMeleeDistance(enemy) {
+  // Simple engagement distance
+  return MELEE_ENGAGE_DISTANCE;
 }
 
-/** Find all grenades nearby that could threaten player */
 function findNearbyGrenades(playerPos, layer, maxDistance = GRENADE_SAFE_DISTANCE * 1.5) {
+  // Find all grenades nearby that could threaten the player
   const game = gameManager.game;
   const idToObj = game?.[translations.objectCreator_]?.[translations.idToObj_];
   if (!idToObj) return [];
   
   const grenades = [];
-  const isLocalOnBypass = isBypassLayer(layer);
   
   for (const obj of Object.values(idToObj)) {
+    // Detect grenades: __type === 9 and not smoke, or has smoke/explosion properties
     const isGrenade = (obj.__type === 9 && obj.type !== 'smoke') || (obj.smokeEmitter && obj.explodeParticle);
-    if (!isGrenade || obj.dead || !obj.pos) continue;
+    
+    if (!isGrenade) continue;
+    if (obj.dead) continue;
+    if (!obj.pos) continue;
     
     // Check layer compatibility
-    const grenadeOnBypass = isBypassLayer(obj.layer);
-    if (!isLocalOnBypass && !grenadeOnBypass && obj.layer !== layer) continue;
+    const isOnBypassLayer = layer === 2 || layer === 3;
+    const grenadeOnBypass = obj.layer === 2 || obj.layer === 3;
+    
+    if (!isOnBypassLayer && !grenadeOnBypass && obj.layer !== layer) {
+      continue; // Different layer and neither is bypass layer
+    }
     
     const distance = Math.hypot(playerPos.x - obj.pos.x, playerPos.y - obj.pos.y);
+    
     if (distance <= maxDistance) {
       grenades.push({
         pos: obj.pos,
@@ -281,10 +433,13 @@ function findNearbyGrenades(playerPos, layer, maxDistance = GRENADE_SAFE_DISTANC
   return grenades;
 }
 
-/** Calculate best direction to evade from grenades */
 function calculateGrenadeEvadeDirection(playerPos, grenades) {
+  // Calculate the best direction to evade from grenades
+  // Returns angle away from danger zones
+  
   if (grenades.length === 0) return null;
   
+  // Calculate weighted away-vector from all grenades
   let awayX = 0;
   let awayY = 0;
   
@@ -294,11 +449,11 @@ function calculateGrenadeEvadeDirection(playerPos, grenades) {
     const dist = Math.hypot(dx, dy);
     
     if (dist < 0.1) {
-      // Inside grenade - flee away HARD
-      awayX += (dx / (dist + 0.1)) * 10;
-      awayY += (dy / (dist + 0.1)) * 10;
+      // Player is inside grenade radius - flee away HARD
+      awayX += dx / (dist + 0.1) * 10;
+      awayY += dy / (dist + 0.1) * 10;
     } else {
-      // Weight by inverse distance
+      // Weight by inverse distance - closer grenades = more weight
       const weight = 1 / (dist + 1);
       awayX += (dx / dist) * weight;
       awayY += (dy / dist) * weight;
@@ -306,7 +461,9 @@ function calculateGrenadeEvadeDirection(playerPos, grenades) {
   }
   
   const magnitude = Math.hypot(awayX, awayY);
-  return magnitude < 0.1 ? null : Math.atan2(awayY / magnitude, awayX / magnitude);
+  if (magnitude < 0.1) return null;
+  
+  return Math.atan2(awayY / magnitude, awayX / magnitude);
 }
 
 
@@ -318,7 +475,7 @@ function findGrenades(me) {
   const mePos = me[translations.visualPos_];
   const isLocalOnBypassLayer = isBypassLayer(me.layer);
   const localLayer = getLocalLayer(me);
-  const maxThreatDistance = ANTI_GRENADE_EVADE_DISTANCE * 2; // Check grenades within 18 units
+  const maxThreatDistance = ANTI_GRENADE_EVADE_DISTANCE * 1.5; // Check grenades within 18 units
   
   const grenades = [];
   
@@ -667,79 +824,6 @@ function meleeLockAutoAttackTicker() {
   }
 }
 
-function predictPosition(enemy, currentPlayer) {
-  if (!enemy || !currentPlayer) return null;
-
-  const enemyPos = enemy[translations.visualPos_];
-  const currentPlayerPos = currentPlayer[translations.visualPos_];
-  const now = performance.now();
-  const enemyId = enemy.__id;
-  const ping = getPing() / 2;
-
-  const history = state.previousEnemies_[enemyId] ?? (state.previousEnemies_[enemyId] = []);
-  history.push([now, { ...enemyPos }]);
-  if (history.length > 20) history.shift();
-
-  if (history.length < 20) {
-    return gameManager.game[translations.camera_][translations.pointToScreen_]({
-      x: enemyPos.x,
-      y: enemyPos.y,
-    });
-  }
-
-  const deltaTime = (now - history[0][0]) / 1000;
-  const velocity = {
-    x: (enemyPos.x - history[0][1].x) / deltaTime,
-    y: (enemyPos.y - history[0][1].y) / deltaTime,
-  };
-
-  const weapon = findWeapon(currentPlayer);
-  const bullet = findBullet(weapon);
-  const bulletSpeed = bullet?.speed || 1000;
-
-  const { x: vex, y: vey } = velocity;
-  const dx = enemyPos.x - currentPlayerPos.x;
-  const dy = enemyPos.y - currentPlayerPos.y;
-  const vb = bulletSpeed;
-
-  const a = vb ** 2 - vex ** 2 - vey ** 2;
-  const b = -2 * (vex * dx + vey * dy);
-  const c = -(dx ** 2) - dy ** 2;
-
-  let t;
-
-  if (Math.abs(a) < 1e-6) {
-    t = -c / b + ping;
-  } else {
-    const discriminant = b ** 2 - 4 * a * c;
-    if (discriminant < 0) {
-      return gameManager.game[translations.camera_][translations.pointToScreen_]({
-        x: enemyPos.x,
-        y: enemyPos.y,
-      });
-    }
-
-    const sqrtD = Math.sqrt(discriminant);
-    const t1 = (-b - sqrtD) / (2 * a);
-    const t2 = (-b + sqrtD) / (2 * a);
-    t = (Math.min(t1, t2) > 0 ? Math.min(t1, t2) : Math.max(t1, t2)) + ping;
-
-    if (t < 0 || t > 5) {
-      return gameManager.game[translations.camera_][translations.pointToScreen_]({
-        x: enemyPos.x,
-        y: enemyPos.y,
-      });
-    }
-  }
-
-  const predictedPos = {
-    x: enemyPos.x + vex * t,
-    y: enemyPos.y + vey * t,
-  };
-
-  return gameManager.game[translations.camera_][translations.pointToScreen_](predictedPos);
-}
-
 function aimbotTicker() {
   try {
     const game = gameManager.game;
@@ -796,6 +880,17 @@ function aimbotTicker() {
       const wantsMeleeLock = settings.meleeLock_.enabled_ && 
         (settings.aimbot_.blatant_ || settings.aimbot_.automatic_ || isAiming);
       
+      // AUTO CRATE BREAK: Move to and break crates automatically
+      const crateBreakState = updateAutoCrateBreak(me);
+      if (crateBreakState && settings.autoCrateBreak_?.enabled_) {
+        // Auto Crate Break takes control
+        setAimState(crateBreakState);
+        aimOverlays.hideAll();
+        state.lastTargetScreenPos_ = null;
+        aimState.silentAimAngle_ = null;
+        return; // Skip all other aim logic
+      }
+      
       // Anti-grenade: Check for nearby grenades
       const mePos = me[translations.visualPos_];
       const nearbyGrenades = findNearbyGrenades(mePos, me.layer);
@@ -827,6 +922,12 @@ function aimbotTicker() {
         
         if (!targetStillValid) {
           meleeEnemy = findClosestTarget(players, me);
+          if (!meleeEnemy) {
+            const lootTarget = findMeleeLootTarget(me);
+            if (lootTarget) {
+              meleeEnemy = lootTarget;
+            }
+          }
           
           state.meleeLockEnemy_ = meleeEnemy;
           state.meleeLockTargetId_ = meleeEnemy?.__id || null;
@@ -1116,6 +1217,52 @@ function aimbotTicker() {
       } else {
         // No enemy found, update HUD to null
         aimOverlays.updateHUD(null);
+        const lootTarget = findLootTarget(me);
+        if (lootTarget) {
+          state.currentLootTarget_ = lootTarget;
+          
+          const lootPos = lootTarget[translations.visualPos_];
+          const lootScreenPos = gameManager.game[translations.camera_][translations.pointToScreen_]({
+            x: lootPos.x,
+            y: lootPos.y,
+          });
+          
+          const distanceToLoot = Math.hypot(lootPos.x - mePos.x, lootPos.y - mePos.y);
+          
+          if (canEngageAimbot && settings.aimbot_.enabled_) {
+            const weapon = findWeapon(me);
+            const bullet = findBullet(weapon);
+            const bulletRange = bullet?.distance || Infinity;
+            
+            // Check if loot is within bullet range
+            // Blatant mode: aim regardless of walls. Otherwise check shootability
+            const canAimAtLoot = distanceToLoot <= bulletRange &&
+              (settings.aimbot_.blatant_ || !settings.aimbot_.wallcheck_ || canCastToPlayer(me, lootTarget, weapon, bullet));
+            
+            const isLootShootable = distanceToLoot <= bulletRange &&
+              canCastToPlayer(me, lootTarget, weapon, bullet);
+            
+            if (canAimAtLoot) {
+              setAimState(
+                new AimState('aimbot', { x: lootScreenPos.x, y: lootScreenPos.y }, null, true)
+              );
+              state.lastTargetScreenPos_ = { x: lootScreenPos.x, y: lootScreenPos.y };
+              aimUpdated = true;
+              const aimSnapshot = aimState.lastAimPos_;
+              dotTargetPos = aimSnapshot
+                ? { x: aimSnapshot.clientX, y: aimSnapshot.clientY }
+                : { x: lootScreenPos.x, y: lootScreenPos.y };
+              isDotTargetShootable = isLootShootable;
+              previewTargetPos = { x: lootScreenPos.x, y: lootScreenPos.y };
+            } else {
+              dotTargetPos = { x: lootScreenPos.x, y: lootScreenPos.y };
+              isDotTargetShootable = false;
+              previewTargetPos = { x: lootScreenPos.x, y: lootScreenPos.y };
+            }
+          }
+        } else {
+          state.currentLootTarget_ = null;
+        }
         
         if (!aimUpdated) {
           previewTargetPos = null;
@@ -1175,44 +1322,13 @@ function aimbotTicker() {
   }
 }
 
-/**
- * Cleanup obsolete velocity data to prevent memory leaks
- * Called periodically to clear tracking for disconnected players
- */
-function cleanupObsoleteVelocityData() {
-  const game = gameManager.game;
-  if (!game) return;
-
-  const playerBarn = game?.[translations.playerBarn_];
-  const playerPool = playerBarn?.playerPool?.[translations.pool_];
-  const activePlayerIds = new Set();
-
-  if (Array.isArray(playerPool)) {
-    playerPool.forEach(p => {
-      if (p && p.__id) activePlayerIds.add(p.__id);
-    });
-  }
-
-  // Remove velocity data for disconnected players
-  for (const playerId in state.velocityBuffer_) {
-    if (!activePlayerIds.has(parseInt(playerId))) {
-      delete state.velocityBuffer_[playerId];
-    }
-  }
-
-  for (const playerId in state.previousEnemies_) {
-    if (!activePlayerIds.has(parseInt(playerId))) {
-      delete state.previousEnemies_[playerId];
-    }
-  }
-}
-
 export default function () {
   const startTicker = () => {
     const uiRoot = getUIRoot();
     if (aimOverlays.ensureInitialized(uiRoot)) {
       if (!tickerAttached) {
         gameManager.pixi._ticker.add(aimbotTicker);
+        // Start melee lock autoattack ticker (runs every 16ms for 60fps)
         if (!meleeLockAutoAttackTickerId) {
           meleeLockAutoAttackTickerId = setInterval(meleeLockAutoAttackTicker, 16);
         }
