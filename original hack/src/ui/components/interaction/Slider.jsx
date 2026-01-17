@@ -68,7 +68,7 @@ const Slider = ({ id, label, value, min = 0, max = 100, warning = false, onChang
           pointerEvents: 'none',
         }}
       >
-        {label}
+        {label}: <span style={{ color: '#6edb72', fontWeight: 'bold' }}>{value}</span>
       </label>
       <input
         ref={sliderRef}

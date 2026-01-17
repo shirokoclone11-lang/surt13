@@ -456,26 +456,8 @@ const updateAimbotDot = (displayPos, isDotTargetShootable, isFocusedEnemy) => {
 
 const updateFovCircle = () => {
   if (!overlayState.fovCircle_) return;
-
-  const game = gameManager?.game;
-  if (!game?.initialized) {
-    overlayState.fovCircle_.style.display = 'none';
-    return;
-  }
-
-  if (settings.aimbot_.showFov_) {
-    const mouseX = game[translations.input_].mousePos._x;
-    const mouseY = game[translations.input_].mousePos._y;
-    const fovDiameter = settings.aimbot_.fov_ * 2;
-
-    overlayState.fovCircle_.style.left = `${mouseX}px`;
-    overlayState.fovCircle_.style.top = `${mouseY}px`;
-    overlayState.fovCircle_.style.width = `${fovDiameter}px`;
-    overlayState.fovCircle_.style.height = `${fovDiameter}px`;
-    overlayState.fovCircle_.style.display = 'block';
-  } else {
-    overlayState.fovCircle_.style.display = 'none';
-  }
+  // FOV circle disabled
+  overlayState.fovCircle_.style.display = 'none';
 };
 
 const hideAllOverlays = () => {

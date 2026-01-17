@@ -15,6 +15,7 @@ import {
   Package,
   Circle,
   PenLine,
+  Activity,
 } from 'lucide-preact';
 
 const Surplus = (props) => (
@@ -42,6 +43,7 @@ export const Icons = {
   LayerSpoof_: Scan,
   ESP_: Radio,
   InfiniteZoom_: ZoomIn,
+  AutoHeal_: Activity,
   Help_: HelpCircle,
   Community_: Users,
   Website_: Globe,

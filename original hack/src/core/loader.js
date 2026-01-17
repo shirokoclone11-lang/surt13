@@ -4,6 +4,7 @@ import esp from '@/features/ESP.js';
 import grenadeTimer from '@/features/GrenadeTimer.js';
 import autoFire, { autoFireEnabled } from '@/features/AutoFire.js';
 import aimbot from '@/features/Aimbot.js';
+import autoHeal from '@/features/AutoHeal.js';
 import mapHighlights from '@/features/MapHighlights.js';
 import autoSwitch from '@/features/AutoSwitch.js';
 import layerSpoof from '@/features/LayerSpoofer.js';
@@ -33,6 +34,7 @@ function injectGame(oninject) {
 const loadStaticPlugins = () => {
   infiniteZoom();
   autoFire();
+  autoHeal();
   mapHighlights();
 };
 
@@ -74,6 +76,15 @@ const flushQueuedInputs = (packet) => {
     packet.addInput(command);
   }
   inputState.queuedInputs_.length = 0;
+  // Forward any queued use-item command from features (AutoHeal etc.)
+  try {
+    if (inputState.useItem_) {
+      packet.useItem = inputState.useItem_;
+      inputState.useItem_ = null;
+    }
+  } catch {
+    // ignore
+  }
 };
 
 const updateEmoteTypes = (loadout) => {

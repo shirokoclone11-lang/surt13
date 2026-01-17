@@ -3,19 +3,16 @@ import { findTeam, findBullet, findWeapon, inputCommands } from '@/utils/constan
 import { gameManager } from '@/core/state.js';
 import { translations } from '@/core/obfuscatedNameTranslator.js';
 import { ref_addEventListener } from '@/core/hook.js';
+import { isLayerSpoofActive, originalLayerValue } from '@/features/LayerSpoofer.js';
 import {
   AimState,
   setAimState,
   getCurrentAimPosition,
+  getPing,
   aimOverlays,
 } from '@/core/aimController.js';
 import { outerDocument, outer } from '@/core/outer.js';
-import { v2, collisionHelpers, sameLayer, ballistics } from '@/utils/math.js';
-import { updateAutoCrateBreak } from '@/features/AutoCrateBreak.js';
-
-// ============================================================================
-// STATE & CONFIGURATION
-// ============================================================================
+import { v2, collisionHelpers, sameLayer } from '@/utils/math.js';
 
 const isBypassLayer = (layer) => layer === 2 || layer === 3;
 
@@ -24,90 +21,14 @@ const state = {
   previousEnemies_: {},
   currentEnemy_: null,
   meleeLockEnemy_: null,
-  meleeLockTargetId_: null,
-  meleeLockStartTime_: null,
   velocityBuffer_: {},
-  velocityCleanupFrame_: 0, // Track frame count for periodic cleanup
   lastTargetScreenPos_: null,
-  canAutoFire_: true,
-  isCurrentEnemyShootable_: false,
-  targetPriority_: {},
-  currentLootTarget_: null,
-  isSwitchingToMelee_: false,
-  isMeleeAutoAttacking_: false,
-  nearestGrenade_: null,
-  lastGrenadeCheckTime_: 0,
-  grenadeEvasionAngle_: null,
-  collisionCacheFrame_: 0, // Cache invalidation frame counter
-  lastCachedObstacles_: null, // Cache obstacles between frames
 };
 
-// Melee constants
+const AIM_SMOOTH_DISTANCE_PX = 6;
+const AIM_SMOOTH_ANGLE = Math.PI / 90;
 const MELEE_ENGAGE_DISTANCE = 5.5;
-const MELEE_DETECTION_DISTANCE = 7.5;
-const MELEE_LOCK_HYSTERESIS = 1.0;
-const MELEE_PREDICTION_TIME = 0.15;
 
-// Grenade constants
-const GRENADE_EXPLOSION_RADIUS = 20;
-const GRENADE_SAFE_DISTANCE = GRENADE_EXPLOSION_RADIUS + 20;
-const GRENADE_EVADE_SPEED = 255;
-const GRENADE_BASE_RADIUS = 15;
-const ANTI_GRENADE_EVADE_DISTANCE = 25;
-const ANTI_GRENADE_CHECK_INTERVAL = 50;
-
-const GRENADE_EXPLOSION_PATTERNS = [
-  'frag',
-  'explosion_frag',
-  'smoke',
-  'explosion_smoke',
-  'gas',
-  'concussion',
-];
-
-const PRIMARY_BUTTON = 0;
-let tickerAttached = false;
-let meleeLockAutoAttackTickerId = null;
-
-
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
-
-/**
- * Simulate mouse down for melee attack
- */
-function simulateMouseDown() {
-  const mouseDownEvent = new MouseEvent('mousedown', {
-    bubbles: true,
-    cancelable: true,
-    view: outer,
-    button: PRIMARY_BUTTON,
-  });
-  outer.dispatchEvent(mouseDownEvent);
-}
-
-/**
- * Simulate mouse up to stop melee attack
- */
-function simulateMouseUp() {
-  const mouseUpEvent = new MouseEvent('mouseup', {
-    bubbles: true,
-    cancelable: true,
-    view: outer,
-    button: PRIMARY_BUTTON,
-  });
-  outer.dispatchEvent(mouseUpEvent);
-}
-
-const getLocalLayer = (player) => player.layer;
-
-const meetsLayerCriteria = (targetLayer, localLayer, isLocalOnBypass) => {
-  if (isBypassLayer(targetLayer)) return true;
-  return targetLayer === localLayer;
-};
-
-/** Calculate aim angle from point to screen center */
 const computeAimAngle = (point) => {
   if (!point) return 0;
   const centerX = outer.innerWidth / 2;
@@ -115,28 +36,31 @@ const computeAimAngle = (point) => {
   return Math.atan2(point.y - centerY, point.x - centerX);
 };
 
-/** Normalize angle using v2 utility */
-const normalizeAngle = (angle) => v2.normalizeAngle_(angle);
+const normalizeAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
-/** Queue input command to input state */
-const queueInput = (command) => inputState.queuedInputs_.push(command);
+const shouldSmoothAim = (currentPos, nextPos) => {
+  if (!nextPos) return false;
+  if (!currentPos) return true;
 
-/** Calculate squared distance (faster for comparisons) */
-const getDistance = (x1, y1, x2, y2) => v2.distanceSqr_(x1, y1, x2, y2);
+  const distance = Math.hypot(nextPos.x - currentPos.x, nextPos.y - currentPos.y);
+  if (distance > AIM_SMOOTH_DISTANCE_PX) return true;
 
-/** Calculate angle from one position to another */
-const calcAngle = (playerPos, targetPos) => v2.angleTowards_(playerPos, targetPos);
-
-/** Extract level from object ID string */
-const getLevel = (id) => {
-  if (typeof id !== 'string') return 0;
-  const match = id.match(/0(\d)$/);
-  return match ? parseInt(match[1], 10) : 0;
+  const angleDiff = Math.abs(
+    normalizeAngle(computeAimAngle(nextPos) - computeAimAngle(currentPos))
+  );
+  return angleDiff > AIM_SMOOTH_ANGLE;
 };
 
-// ============================================================================
-// OBSTACLE & COLLISION DETECTION
-// ============================================================================
+const getLocalLayer = (player) => {
+  if (isBypassLayer(player.layer)) return player.layer;
+  if (isLayerSpoofActive && originalLayerValue !== undefined) return originalLayerValue;
+  return player.layer;
+};
+
+const meetsLayerCriteria = (targetLayer, localLayer, isLocalOnBypass) => {
+  if (isBypassLayer(targetLayer) || isLocalOnBypass) return true;
+  return targetLayer === localLayer;
+};
 
 const BLOCKING_OBSTACLE_PATTERNS = [
   'metal_wall_',
@@ -160,23 +84,10 @@ const BLOCKING_OBSTACLE_PATTERNS = [
   'bollard_',
   'sandbags_',
   'hedgehog',
-  'stone_01',
-  'stone_02',
-  'stone_03',
-  'stone_04',
-  'stone_05',
-  'stone_06',
-  'stone_07',
-  'stone_08',
-  'stone_09',
-  'stone_0',
-  'tree_',
-  'glass_wall_',
-  'locker_',
-  'deposit_box_',
 ];
 
 const NON_BLOCKING_OBSTACLE_PATTERNS = [
+  'tree_',
   'bush_',
   'brush_',
   'crate_',
@@ -192,6 +103,9 @@ const NON_BLOCKING_OBSTACLE_PATTERNS = [
   'table_',
   'drawers_',
   'window',
+  'glass_wall_',
+  'locker_',
+  'deposit_box_',
   'toilet_',
   'pot_',
   'planter_',
@@ -200,115 +114,100 @@ const NON_BLOCKING_OBSTACLE_PATTERNS = [
   'egg_',
   'woodpile_',
   'decal',
-
+  'stone_01',
+  'stone_02',
+  'stone_03',
+  'stone_04',
+  'stone_05',
+  'stone_06',
+  'stone_07',
+  'stone_08',
+  'stone_09',
+  'stone_0',
 ];
 
 const isObstacleBlocking = (obstacle) => {
   if (obstacle.collidable === false) return false;
-  if (obstacle.isWall === true) return true;
-  if (obstacle.destructible === false) return true;
 
   const obstacleType = obstacle.type || '';
 
-  // Check blocking patterns first (more likely)
+  if (obstacle.isWall === true) return true;
+
+  if (obstacle.destructible === false) return true;
+
   for (const pattern of BLOCKING_OBSTACLE_PATTERNS) {
     if (obstacleType.includes(pattern)) return true;
   }
 
-  // Check non-blocking patterns (stop checking if found)
   for (const pattern of NON_BLOCKING_OBSTACLE_PATTERNS) {
     if (obstacleType.includes(pattern)) return false;
   }
 
-  // High health obstacles usually block
-  return obstacle.health !== undefined && obstacle.health > 200;
+  if (obstacle.health !== undefined && obstacle.health > 200) {
+    return true;
+  }
+
+  return false;
 };
 
 const canCastToPlayer = (localPlayer, targetPlayer, weapon, bullet) => {
-  if (!weapon || !bullet) return true;
+  if (!weapon || !bullet) {
+    return true;
+  }
 
   const game = gameManager.game;
   const idToObj = game?.[translations.objectCreator_]?.[translations.idToObj_];
-  if (!idToObj) return true;
+  if (!idToObj) {
+    return true;
+  }
 
   const BULLET_HEIGHT = 0.25;
-  const trueLayer = localPlayer.layer;
+  const trueLayer =
+    isLayerSpoofActive && originalLayerValue !== undefined ? originalLayerValue : localPlayer.layer;
+
   const playerPos = localPlayer[translations.visualPos_];
   const targetPos = targetPlayer[translations.visualPos_];
 
   const dx = targetPos.x - playerPos.x;
   const dy = targetPos.y - playerPos.y;
-  const maxDistance = Math.hypot(dx, dy);
-  
-  // If target is very close, don't do expensive collision checks
-  if (maxDistance < 3) return true;
-  
   const aimAngle = Math.atan2(dy, dx);
+
   const dir = v2.create_(Math.cos(aimAngle), Math.sin(aimAngle));
+
   const baseSpread = (weapon.shotSpread || 0) * (Math.PI / 180);
   const generousSpread = baseSpread * 1.5;
 
-  // Adaptive ray count: reduced and optimized
-  const rayCount = Math.min(
-    Math.ceil((weapon.shotSpread || 0) * 1.2) + 5,
-    20 // Cap at 20 rays (was potentially 30+)
-  );
+  const maxDistance = Math.hypot(dx, dy);
 
-  // Cache and reuse obstacle filtering
-  let blockingObstacles = state.lastCachedObstacles_;
-  if (!blockingObstacles || state.collisionCacheFrame_ > 5) {
-    blockingObstacles = Object.values(idToObj).filter((obj) => {
-      if (!obj.collider || obj.dead) return false;
-      if (obj.height !== undefined && obj.height < BULLET_HEIGHT) return false;
-      if (obj.layer !== undefined && !sameLayer(obj.layer, trueLayer)) return false;
-      return isObstacleBlocking(obj);
-    });
-    state.lastCachedObstacles_ = blockingObstacles;
-    state.collisionCacheFrame_ = 0;
-  } else {
-    state.collisionCacheFrame_++;
+  const rayCount = Math.max(15, Math.ceil((weapon.shotSpread || 0) * 1.5));
+
+  const allObstacles = Object.values(idToObj).filter((obj) => {
+    if (!obj.collider) return false;
+    if (obj.dead) return false;
+    if (obj.height !== undefined && obj.height < BULLET_HEIGHT) return false;
+    if (obj.layer !== undefined && !sameLayer(obj.layer, trueLayer)) return false;
+    return true;
+  });
+
+  const blockingObstacles = allObstacles.filter(isObstacleBlocking);
+
+  if (blockingObstacles.length === 0) {
+    return true;
   }
 
-  if (blockingObstacles.length === 0) return true;
-
-  // Early exit: check middle ray first (most likely to be unblocked)
-  const middleRayAngle = aimAngle;
-  const middleRayDir = v2.create_(Math.cos(middleRayAngle), Math.sin(middleRayAngle));
-  const middleEndPos = v2.add_(playerPos, v2.mul_(middleRayDir, maxDistance));
-  
-  let middleRayBlocked = false;
-  for (const obstacle of blockingObstacles) {
-    const collision = collisionHelpers.intersectSegment_(obstacle.collider, playerPos, middleEndPos);
-    if (collision) {
-      const distToCollision = v2.length_(v2.sub_(collision.point, playerPos));
-      if (distToCollision < maxDistance - 0.75) {
-        middleRayBlocked = true;
-        break;
-      }
-    }
-  }
-  
-  // If middle ray is clear, target is definitely shootable
-  if (!middleRayBlocked) return true;
-
-  // Only check remaining rays if middle ray is blocked
-  let unblocked = 0;
-  const requiredUnblocked = Math.max(2, Math.ceil(rayCount * 0.3));
-  
   for (let i = 0; i < rayCount; i++) {
-    if (i === Math.floor(rayCount / 2)) continue; // Skip middle ray, already checked
-    
     const t = rayCount === 1 ? 0.5 : i / (rayCount - 1);
     const rayAngle = aimAngle - generousSpread / 2 + generousSpread * t;
     const rayDir = v2.create_(Math.cos(rayAngle), Math.sin(rayAngle));
+
     const endPos = v2.add_(playerPos, v2.mul_(rayDir, maxDistance));
-    
     let blocked = false;
+
     for (const obstacle of blockingObstacles) {
       const collision = collisionHelpers.intersectSegment_(obstacle.collider, playerPos, endPos);
       if (collision) {
         const distToCollision = v2.length_(v2.sub_(collision.point, playerPos));
-        if (distToCollision < maxDistance - 0.75) {
+        if (distToCollision < maxDistance - 0.5) {
           blocked = true;
           break;
         }
@@ -316,89 +215,40 @@ const canCastToPlayer = (localPlayer, targetPlayer, weapon, bullet) => {
     }
 
     if (!blocked) {
-      unblocked++;
-      // Early exit if we have enough clear rays
-      if (unblocked >= requiredUnblocked) return true;
+      return true;
     }
   }
 
-  return unblocked >= requiredUnblocked;
+  return false;
 };
 
-// ============================================================================
-// POSITION PREDICTION
-// ============================================================================
+const queueInput = (command) => inputState.queuedInputs_.push(command);
 
-function predictPosition(enemy, currentPlayer) {
-  if (!enemy || !currentPlayer) return null;
-
-  const enemyPos = enemy[translations.visualPos_];
-  const currentPlayerPos = currentPlayer[translations.visualPos_];
-  const enemyId = enemy.__id;
-  const history = state.previousEnemies_[enemyId] ?? (state.previousEnemies_[enemyId] = []);
-  const now = performance.now();
-  
-  history.push([now, { x: enemyPos.x, y: enemyPos.y }]);
-  
-  // Keep only recent history to prevent memory bloat
-  if (history.length > 12) history.shift();
-
-  // Need minimum samples for velocity calculation
-  if (history.length < 3) {
-    return gameManager.game[translations.camera_][translations.pointToScreen_]({
-      x: enemyPos.x,
-      y: enemyPos.y,
-    });
+const handleKeydown = (event) => {
+  if (event.code !== settings.keybinds_.toggleStickyTarget_) return;
+  if (state.focusedEnemy_) {
+    state.focusedEnemy_ = null;
+    setAimState(new AimState('idle', null, null, true));
+    return;
   }
-
-  // Calculate velocity from recent samples (last 3 samples = ~33ms window)
-  const oldestIdx = Math.max(0, history.length - 3);
-  const newestIdx = history.length - 1;
-  const oldPos = history[oldestIdx][1];
-  const newPos = history[newestIdx][1];
-  const timeDiff = (history[newestIdx][0] - history[oldestIdx][0]) / 1000;
-  
-  let velocityX = 0;
-  let velocityY = 0;
-  
-  if (timeDiff > 0.001) {
-    velocityX = (newPos.x - oldPos.x) / timeDiff;
-    velocityY = (newPos.y - oldPos.y) / timeDiff;
+  if (settings.aimbot_.stickyTarget_) {
+    state.focusedEnemy_ = state.currentEnemy_;
   }
+};
 
-  // Clamp velocity to reasonable range
-  const velMag = Math.hypot(velocityX, velocityY);
-  if (velMag > 2000) {
-    const scale = 2000 / velMag;
-    velocityX *= scale;
-    velocityY *= scale;
-  }
+Reflect.apply(ref_addEventListener, outer, ['keydown', handleKeydown]);
 
-  // Get ballistics parameters
-  const weapon = findWeapon(currentPlayer);
-  const bullet = findBullet(weapon);
-  const bulletSpeed = bullet?.speed || 1000;
+let tickerAttached = false;
 
-  // Use quadratic ballistics solver
-  const targetVel = { x: velocityX, y: velocityY };
-  const t = ballistics.quadraticIntercept_(currentPlayerPos, enemyPos, targetVel, bulletSpeed);
-  
-  if (t === null) {
-    return gameManager.game[translations.camera_][translations.pointToScreen_](enemyPos);
-  }
-
-  // Apply prediction level smoothing
-  const predictionLevel = settings.aimbot_.predictionLevel_ ?? 1.0;
-  const predictedPos = {
-    x: enemyPos.x + velocityX * t * predictionLevel,
-    y: enemyPos.y + velocityY * t * predictionLevel,
-  };
-
-  return gameManager.game[translations.camera_][translations.pointToScreen_](predictedPos);
+function getDistance(x1, y1, x2, y2) {
+  return (x1 - x2) ** 2 + (y1 - y2) ** 2;
 }
 
-function getAdaptiveMeleeDistance(enemy) {
-  return MELEE_ENGAGE_DISTANCE;
+function calcAngle(playerPos, mePos) {
+  const dx = mePos.x - playerPos.x;
+  const dy = mePos.y - playerPos.y;
+
+  return Math.atan2(dy, dx);
 }
 
 /** Find all grenades nearby that could threaten player */
@@ -817,6 +667,79 @@ function meleeLockAutoAttackTicker() {
   }
 }
 
+function predictPosition(enemy, currentPlayer) {
+  if (!enemy || !currentPlayer) return null;
+
+  const enemyPos = enemy[translations.visualPos_];
+  const currentPlayerPos = currentPlayer[translations.visualPos_];
+  const now = performance.now();
+  const enemyId = enemy.__id;
+  const ping = getPing() / 2;
+
+  const history = state.previousEnemies_[enemyId] ?? (state.previousEnemies_[enemyId] = []);
+  history.push([now, { ...enemyPos }]);
+  if (history.length > 20) history.shift();
+
+  if (history.length < 20) {
+    return gameManager.game[translations.camera_][translations.pointToScreen_]({
+      x: enemyPos.x,
+      y: enemyPos.y,
+    });
+  }
+
+  const deltaTime = (now - history[0][0]) / 1000;
+  const velocity = {
+    x: (enemyPos.x - history[0][1].x) / deltaTime,
+    y: (enemyPos.y - history[0][1].y) / deltaTime,
+  };
+
+  const weapon = findWeapon(currentPlayer);
+  const bullet = findBullet(weapon);
+  const bulletSpeed = bullet?.speed || 1000;
+
+  const { x: vex, y: vey } = velocity;
+  const dx = enemyPos.x - currentPlayerPos.x;
+  const dy = enemyPos.y - currentPlayerPos.y;
+  const vb = bulletSpeed;
+
+  const a = vb ** 2 - vex ** 2 - vey ** 2;
+  const b = -2 * (vex * dx + vey * dy);
+  const c = -(dx ** 2) - dy ** 2;
+
+  let t;
+
+  if (Math.abs(a) < 1e-6) {
+    t = -c / b + ping;
+  } else {
+    const discriminant = b ** 2 - 4 * a * c;
+    if (discriminant < 0) {
+      return gameManager.game[translations.camera_][translations.pointToScreen_]({
+        x: enemyPos.x,
+        y: enemyPos.y,
+      });
+    }
+
+    const sqrtD = Math.sqrt(discriminant);
+    const t1 = (-b - sqrtD) / (2 * a);
+    const t2 = (-b + sqrtD) / (2 * a);
+    t = (Math.min(t1, t2) > 0 ? Math.min(t1, t2) : Math.max(t1, t2)) + ping;
+
+    if (t < 0 || t > 5) {
+      return gameManager.game[translations.camera_][translations.pointToScreen_]({
+        x: enemyPos.x,
+        y: enemyPos.y,
+      });
+    }
+  }
+
+  const predictedPos = {
+    x: enemyPos.x + vex * t,
+    y: enemyPos.y + vey * t,
+  };
+
+  return gameManager.game[translations.camera_][translations.pointToScreen_](predictedPos);
+}
+
 function aimbotTicker() {
   try {
     const game = gameManager.game;
@@ -873,17 +796,6 @@ function aimbotTicker() {
       const wantsMeleeLock = settings.meleeLock_.enabled_ && 
         (settings.aimbot_.blatant_ || settings.aimbot_.automatic_ || isAiming);
       
-      // AUTO CRATE BREAK: Move to and break crates automatically
-      const crateBreakState = updateAutoCrateBreak(me);
-      if (crateBreakState && settings.autoCrateBreak_?.enabled_) {
-        // Auto Crate Break takes control
-        setAimState(crateBreakState);
-        aimOverlays.hideAll();
-        state.lastTargetScreenPos_ = null;
-        aimState.silentAimAngle_ = null;
-        return; // Skip all other aim logic
-      }
-      
       // Anti-grenade: Check for nearby grenades
       const mePos = me[translations.visualPos_];
       const nearbyGrenades = findNearbyGrenades(mePos, me.layer);
@@ -915,12 +827,6 @@ function aimbotTicker() {
         
         if (!targetStillValid) {
           meleeEnemy = findClosestTarget(players, me);
-          if (!meleeEnemy) {
-            const lootTarget = findMeleeLootTarget(me);
-            if (lootTarget) {
-              meleeEnemy = lootTarget;
-            }
-          }
           
           state.meleeLockEnemy_ = meleeEnemy;
           state.meleeLockTargetId_ = meleeEnemy?.__id || null;
@@ -1210,52 +1116,6 @@ function aimbotTicker() {
       } else {
         // No enemy found, update HUD to null
         aimOverlays.updateHUD(null);
-        const lootTarget = findLootTarget(me);
-        if (lootTarget) {
-          state.currentLootTarget_ = lootTarget;
-          
-          const lootPos = lootTarget[translations.visualPos_];
-          const lootScreenPos = gameManager.game[translations.camera_][translations.pointToScreen_]({
-            x: lootPos.x,
-            y: lootPos.y,
-          });
-          
-          const distanceToLoot = Math.hypot(lootPos.x - mePos.x, lootPos.y - mePos.y);
-          
-          if (canEngageAimbot && settings.aimbot_.enabled_) {
-            const weapon = findWeapon(me);
-            const bullet = findBullet(weapon);
-            const bulletRange = bullet?.distance || Infinity;
-            
-            // Check if loot is within bullet range
-            // Blatant mode: aim regardless of walls. Otherwise check shootability
-            const canAimAtLoot = distanceToLoot <= bulletRange &&
-              (settings.aimbot_.blatant_ || !settings.aimbot_.wallcheck_ || canCastToPlayer(me, lootTarget, weapon, bullet));
-            
-            const isLootShootable = distanceToLoot <= bulletRange &&
-              canCastToPlayer(me, lootTarget, weapon, bullet);
-            
-            if (canAimAtLoot) {
-              setAimState(
-                new AimState('aimbot', { x: lootScreenPos.x, y: lootScreenPos.y }, null, true)
-              );
-              state.lastTargetScreenPos_ = { x: lootScreenPos.x, y: lootScreenPos.y };
-              aimUpdated = true;
-              const aimSnapshot = aimState.lastAimPos_;
-              dotTargetPos = aimSnapshot
-                ? { x: aimSnapshot.clientX, y: aimSnapshot.clientY }
-                : { x: lootScreenPos.x, y: lootScreenPos.y };
-              isDotTargetShootable = isLootShootable;
-              previewTargetPos = { x: lootScreenPos.x, y: lootScreenPos.y };
-            } else {
-              dotTargetPos = { x: lootScreenPos.x, y: lootScreenPos.y };
-              isDotTargetShootable = false;
-              previewTargetPos = { x: lootScreenPos.x, y: lootScreenPos.y };
-            }
-          }
-        } else {
-          state.currentLootTarget_ = null;
-        }
         
         if (!aimUpdated) {
           previewTargetPos = null;

@@ -330,7 +330,6 @@ function findTarget(players, me) {
   const localLayer = getLocalLayer(me);
   let enemy = null;
   let minDistance = Infinity;
-  const fovRadiusSquared = settings.aimbot_.fov_ ** 2;
 
   for (const player of players) {
     if (!player.active) continue;
@@ -351,8 +350,6 @@ function findTarget(players, me) {
       gameManager.game[translations.input_].mousePos._x,
       gameManager.game[translations.input_].mousePos._y
     );
-
-    if (distance > fovRadiusSquared) continue;
 
     if (distance < minDistance) {
       minDistance = distance;
@@ -593,7 +590,6 @@ function aimbotTicker() {
         displayPos = { x: previewTargetPos.x, y: previewTargetPos.y };
       }
       aimOverlays.updateDot(displayPos, isDotTargetShootable, !!state.focusedEnemy_);
-      aimOverlays.updateFovCircle();
     } catch (error) {
       aimOverlays.hideAll();
       setAimState(new AimState('idle', null, null, true));
@@ -606,6 +602,12 @@ function aimbotTicker() {
     setAimState(new AimState({ mode: 'idle', immediate: true }));
     state.lastTargetScreenPos_ = null;
   }
+}
+
+export function isEnemyBehindWall(localPlayer, targetPlayer) {
+  const weapon = findWeapon(localPlayer);
+  const bullet = findBullet(weapon);
+  return !canCastToPlayer(localPlayer, targetPlayer, weapon, bullet);
 }
 
 export default function () {

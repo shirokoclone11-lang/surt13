@@ -16,6 +16,7 @@ export const aimState = {
 export const inputState = {
   queuedInputs_: [],
   toMouseLen_: 0,
+  useItem_: null,
 };
 
 export let gameManager;
@@ -49,6 +50,15 @@ export const defaultSettings = {
   },
   autoFire_: {
     enabled_: true,
+  },
+  autoHeal_: {
+    enabled_: true,
+    bandageThreshold_: 85,
+    kitThreshold_: 25,
+    enemyCheck_: true,
+    enemyDistance_: 15,
+    boostKeepMax_: true,
+    boostThreshold_: 75,
   },
   xray_: {
     enabled_: true,
@@ -124,6 +134,16 @@ const settingsKeys = {
   autoFire_: {
     _k: '󠄸',
     enabled_: '󠄴',
+  },
+  autoHeal_: {
+    _k: '󠄹',
+    enabled_: '󠄺',
+    bandageThreshold_: '󠄻',
+    kitThreshold_: '󠄼',
+    boostThreshold_: '󠄽',
+    enemyCheck_: '󠄾',
+    enemyDistance_: '󠄿',
+    boostKeepMax_: '󠅀',
   },
   xray_: {
     _k: '󠅔',
